@@ -121,9 +121,12 @@ POST /v1/images/generations
   "quality": "medium",
   "size": "1024x1024",
   "response_format": "b64_json",
-  "output_format": "png"
+  "output_format": "png",
+  "async": true
 }
 ```
+
+`async` 只在图像设置面板开启“异步生图”时发送；开关默认关闭，关闭时请求体里不会包含该字段。
 
 字段说明：
 
@@ -136,6 +139,7 @@ POST /v1/images/generations
 | `size` | string | 否 | 输出尺寸。可为 `1024x1024`，也可由前端把 `16:9`、`9:16` 等比例换算成像素尺寸。`auto` 不发送。 |
 | `response_format` | string | 否 | 当前前端固定发送 `b64_json`。 |
 | `output_format` | string | 否 | 当前前端固定发送 `png`。 |
+| `async` | boolean | 否 | 仅开启“异步生图”时发送 `true`；默认关闭时不发送。 |
 
 图片尺寸限制由前端校验：
 
@@ -147,7 +151,30 @@ POST /v1/images/generations
 
 ### 成功响应
 
-前端兼容 URL 和 base64 两种结果：
+前端兼容同步图片结果和异步任务结果。若上游或后台渠道返回任务对象，例如：
+
+```json
+{
+  "task_id": "image_task_id",
+  "status": "queued"
+}
+```
+
+前端会自动轮询：
+
+```http
+GET /api/v1/images/generations/{task_id}?model=gpt-image-2
+```
+
+本地直连模式下则轮询：
+
+```http
+GET /v1/images/generations/{task_id}
+```
+
+直到状态为 `succeeded`、`success` 或 `completed` 后再解析图片。轮询间隔会读取响应里的 `retry_after`，否则前几次约 1.5 秒，之后约 3 秒，最多约 120 次。
+
+成功图片结果兼容 URL 和 base64 两种格式：
 
 ```json
 {
@@ -186,7 +213,8 @@ curl -X POST 'https://canvas.jo2api.com/api/v1/images/generations' \
     "quality": "medium",
     "size": "1024x1024",
     "response_format": "b64_json",
-    "output_format": "png"
+    "output_format": "png",
+    "async": true
   }'
 ```
 
@@ -220,8 +248,12 @@ POST /v1/images/edits
 | `size` | string | 否 | 输出尺寸，规则同文生图。 |
 | `response_format` | string | 否 | 当前前端固定发送 `b64_json`。 |
 | `output_format` | string | 否 | 当前前端固定发送 `png`。 |
+| `async` | string | 否 | 仅开启“异步生图”时发送字符串 `true`；默认关闭时不发送。 |
+| `mask` | file | 否 | 局部编辑遮罩。使用图片节点“局部编辑”入口时发送同尺寸 PNG mask。 |
 
 当前前端会按参考图顺序生成 `图片1`、`图片2` 等编号说明，并把编号说明注入实际提示词，方便用户在 prompt 中引用不同参考图。
+
+图片节点的“局部编辑”入口会在原图上绘制遮罩，并把遮罩作为 `mask` 文件随 `/images/edits` 一起提交；普通参考图编辑不发送 `mask`。
 
 ### curl 示例
 
@@ -235,12 +267,26 @@ curl -X POST 'https://canvas.jo2api.com/api/v1/images/edits' \
   -F 'size=1024x1024' \
   -F 'response_format=b64_json' \
   -F 'output_format=png' \
-  -F 'image=@reference.png'
+  -F 'async=true' \
+  -F 'image=@reference.png' \
+  -F 'mask=@mask.png'
 ```
 
 ### 成功响应
 
-响应解析规则同文生图，`data[].url` 和 `data[].b64_json` 都可用。
+响应解析规则同文生图，支持同步图片结果和异步任务结果。图生图异步任务会轮询：
+
+```http
+GET /api/v1/images/edits/{task_id}?model=gpt-image-2
+```
+
+本地直连模式下则轮询：
+
+```http
+GET /v1/images/edits/{task_id}
+```
+
+最终图片结果兼容 `data[].url` 和 `data[].b64_json`。
 
 ## OpenAI 风格视频生成
 
