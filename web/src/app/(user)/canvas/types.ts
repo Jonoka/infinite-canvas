@@ -33,6 +33,7 @@ export type CanvasNodeMetadata = {
     size?: string;
     quality?: string;
     count?: number;
+    imageAsync?: string;
     seconds?: string;
     vquality?: string;
     generateAudio?: string;

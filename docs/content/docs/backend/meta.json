@@ -5,6 +5,7 @@
   "pages": [
     "local-development",
     "api-response",
+    "ai-api",
     "system-settings",
     "backend-database",
     "canvas-data-structure"

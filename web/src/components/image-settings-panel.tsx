@@ -32,15 +32,16 @@ const aspectOptions = [
 
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "quality" | "size" | "count", value: string) => void;
+    onConfigChange: (key: "quality" | "size" | "count" | "imageAsync", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
     maxCount?: number;
     quickCount?: number;
+    showAsyncSwitch?: boolean;
 };
 
-export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10, showAsyncSwitch = false }: ImageSettingsPanelProps) {
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
@@ -127,6 +128,17 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         <CountInput value={count} max={maxCount} theme={theme} onChange={(value) => onConfigChange("count", String(value || 1))} />
                     </div>
                 </div>
+                {showAsyncSwitch ? (
+                    <div className="flex items-center justify-between gap-3 rounded-xl px-1 py-1">
+                        <div>
+                            <SettingTitle color={theme.node.muted}>异步生图</SettingTitle>
+                            <div className="mt-1 text-xs opacity-60">开启后请求会携带 async: true</div>
+                        </div>
+                        <span onMouseDown={(event) => event.stopPropagation()}>
+                            <Switch size="small" checked={config.imageAsync === "true"} onChange={(checked) => onConfigChange("imageAsync", checked ? "true" : "false")} />
+                        </span>
+                    </div>
+                ) : null}
             </div>
         </ImageSettingsTheme>
     );

@@ -1,0 +1,10 @@
+services:
+  docs:
+    image: infinite-canvas-docs:jonoka-local
+    build:
+      context: .
+      dockerfile: docs/Dockerfile
+    container_name: infinite-canvas-docs
+    ports:
+      - "127.0.0.1:3011:3000"
+    restart: unless-stopped

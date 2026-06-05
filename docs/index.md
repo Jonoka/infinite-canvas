@@ -17,6 +17,7 @@
 
 - [本地开发](/docs/backend/local-development)
 - [接口响应约定](/docs/backend/api-response)
+- [AI 生图和生视频接口](/docs/backend/ai-api)
 - [系统配置数据结构](/docs/backend/system-settings)
 - [后端数据库说明](/docs/backend/backend-database)
 - [画布数据结构](/docs/backend/canvas-data-structure)

@@ -1,0 +1,646 @@
+---
+title: AI 生图和生视频接口
+description: 生图、图生图、OpenAI 风格视频、Seedance 视频和参考素材上传接口说明
+---
+
+# AI 生图和生视频接口
+
+本文档说明无限画布当前使用的 AI 图片和视频接口。项目支持两种调用方式：
+
+| 模式 | 请求地址 | API Key 保存位置 | 适用场景 |
+| --- | --- | --- | --- |
+| 后台渠道 | 本项目后端 `/api/v1/*` 代理接口 | 服务端管理后台私有渠道配置 | 公网部署、多人使用 |
+| 本地直连 | 用户配置的 OpenAI 兼容 Base URL | 浏览器本地配置 | 本地或个人使用 |
+
+公网部署推荐使用后台渠道，避免把真实 API Key 暴露在浏览器里。
+
+## 通用约定
+
+### 鉴权
+
+后台渠道接口都挂在 `/api/v1/*` 下，并要求登录用户 JWT：
+
+```http
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+登录接口返回的 `data.token` 即为这里使用的 token。
+
+### 模型渠道选择
+
+后台渠道模式下，前端请求本站接口，例如：
+
+```text
+POST /api/v1/images/generations
+```
+
+后端会根据请求里的 `model` 字段，从管理后台私有渠道中选择一个满足以下条件的渠道：
+
+- 渠道已启用。
+- `baseUrl` 和 `apiKey` 已配置。
+- 渠道模型列表包含目标 `model`。
+
+随后后端把请求转发到该渠道的 OpenAI 兼容路径，例如 `/v1/images/generations`。
+
+### 响应包裹
+
+项目自己的业务接口一般返回：
+
+```json
+{
+  "code": 0,
+  "data": {},
+  "msg": "ok"
+}
+```
+
+但 AI 代理接口会尽量透传上游响应。前端同时兼容两种形态：
+
+```json
+{
+  "data": []
+}
+```
+
+以及：
+
+```json
+{
+  "code": 0,
+  "data": {},
+  "msg": "ok"
+}
+```
+
+如果后端或上游返回失败，常见响应为：
+
+```json
+{
+  "code": 1,
+  "data": null,
+  "msg": "AI 接口请求失败"
+}
+```
+
+前端应以 `code` 和业务字段判断是否成功，不要只看 HTTP 状态码。
+
+### 扣费和返还
+
+后台渠道模式下，后端会在调用上游前按 `public.modelChannel.modelCosts` 中配置的模型算力点预扣：
+
+- JSON 或 multipart 请求里的 `n` 会作为生成数量。
+- 实际预扣 = 模型单次消耗 × `n`。
+- 上游请求失败时会尝试返还。
+- 未配置模型消耗时默认不扣除。
+
+## 文生图
+
+### 接口
+
+后台渠道：
+
+```http
+POST /api/v1/images/generations
+Content-Type: application/json
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+本地直连等价 OpenAI 兼容接口：
+
+```http
+POST /v1/images/generations
+```
+
+### 请求体
+
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "一只赛博朋克风格的猫",
+  "n": 1,
+  "quality": "medium",
+  "size": "1024x1024",
+  "response_format": "b64_json",
+  "output_format": "png"
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 是 | 模型名。后台渠道会按该模型选择渠道。 |
+| `prompt` | string | 是 | 生图提示词。前端会把系统提示词拼到提示词前面。 |
+| `n` | number | 否 | 生成数量。前端限制为 1-15。 |
+| `quality` | string | 否 | 画质。前端会把 `1k/2k/4k` 归一为 `low/medium/high`，异常值不发送。 |
+| `size` | string | 否 | 输出尺寸。可为 `1024x1024`，也可由前端把 `16:9`、`9:16` 等比例换算成像素尺寸。`auto` 不发送。 |
+| `response_format` | string | 否 | 当前前端固定发送 `b64_json`。 |
+| `output_format` | string | 否 | 当前前端固定发送 `png`。 |
+
+图片尺寸限制由前端校验：
+
+- 宽高必须为正整数。
+- 宽高必须是 16 的倍数。
+- 最长边不超过 3840px。
+- 宽高比不超过 3:1。
+- 总像素在 `655360` 到 `8294400` 之间。
+
+### 成功响应
+
+前端兼容 URL 和 base64 两种结果：
+
+```json
+{
+  "data": [
+    {
+      "url": "https://example.com/image.png"
+    }
+  ]
+}
+```
+
+或：
+
+```json
+{
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgo..."
+    }
+  ]
+}
+```
+
+项目前端会把 `b64_json` 转成 `data:image/png;base64,...`。
+
+### curl 示例
+
+```bash
+curl -X POST 'https://canvas.jo2api.com/api/v1/images/generations' \
+  -H 'Authorization: Bearer YOUR_LOGIN_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-image-2",
+    "prompt": "一只赛博朋克风格的猫",
+    "n": 1,
+    "quality": "medium",
+    "size": "1024x1024",
+    "response_format": "b64_json",
+    "output_format": "png"
+  }'
+```
+
+## 图生图 / 参考图编辑
+
+### 接口
+
+后台渠道：
+
+```http
+POST /api/v1/images/edits
+Content-Type: multipart/form-data
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+本地直连等价 OpenAI 兼容接口：
+
+```http
+POST /v1/images/edits
+```
+
+### 表单字段
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 是 | 模型名。 |
+| `prompt` | string | 是 | 编辑提示词。前端会把参考图编号说明拼进提示词。 |
+| `image` | file | 是 | 参考图文件。可重复追加多个 `image` 字段。 |
+| `n` | string | 否 | 生成数量。前端限制为 1-15。 |
+| `quality` | string | 否 | 画质，规则同文生图。 |
+| `size` | string | 否 | 输出尺寸，规则同文生图。 |
+| `response_format` | string | 否 | 当前前端固定发送 `b64_json`。 |
+| `output_format` | string | 否 | 当前前端固定发送 `png`。 |
+
+当前前端会按参考图顺序生成 `图片1`、`图片2` 等编号说明，并把编号说明注入实际提示词，方便用户在 prompt 中引用不同参考图。
+
+### curl 示例
+
+```bash
+curl -X POST 'https://canvas.jo2api.com/api/v1/images/edits' \
+  -H 'Authorization: Bearer YOUR_LOGIN_TOKEN' \
+  -F 'model=gpt-image-2' \
+  -F 'prompt=参考图片1的构图，把主体改成赛博朋克风格' \
+  -F 'n=1' \
+  -F 'quality=medium' \
+  -F 'size=1024x1024' \
+  -F 'response_format=b64_json' \
+  -F 'output_format=png' \
+  -F 'image=@reference.png'
+```
+
+### 成功响应
+
+响应解析规则同文生图，`data[].url` 和 `data[].b64_json` 都可用。
+
+## OpenAI 风格视频生成
+
+OpenAI 风格视频接口用于兼容提供 `/v1/videos`、`/v1/videos/{id}`、`/v1/videos/{id}/content` 的上游服务，例如 `grok-imagine-video` 类接口。
+
+### 创建视频任务
+
+后台渠道：
+
+```http
+POST /api/v1/videos
+Content-Type: multipart/form-data
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+本地直连等价接口：
+
+```http
+POST /v1/videos
+```
+
+表单字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 是 | 视频模型名。 |
+| `prompt` | string | 是 | 视频提示词。 |
+| `seconds` | string | 否 | 视频秒数。前端会归一到 1-20 秒，默认 6。 |
+| `size` | string | 否 | 视频尺寸。`auto` 不发送；常见横屏为 `1280x720`，竖屏为 `720x1280`。 |
+| `resolution_name` | string | 否 | 清晰度。前端会归一为 `480p` 或 `720p` 等。 |
+| `preset` | string | 否 | 当前前端固定发送 `normal`。 |
+| `input_reference[]` | file | 否 | 参考图文件，可多个。OpenAI 风格视频当前最多取前 7 张参考图。 |
+
+curl 示例：
+
+```bash
+curl -X POST 'https://canvas.jo2api.com/api/v1/videos' \
+  -H 'Authorization: Bearer YOUR_LOGIN_TOKEN' \
+  -F 'model=grok-imagine-video' \
+  -F 'prompt=一只猫在霓虹街道上奔跑，电影感镜头' \
+  -F 'seconds=6' \
+  -F 'size=1280x720' \
+  -F 'resolution_name=720p' \
+  -F 'preset=normal' \
+  -F 'input_reference[]=@reference.png'
+```
+
+期望创建响应：
+
+```json
+{
+  "id": "video_task_id",
+  "status": "queued"
+}
+```
+
+如果接口经过本站业务包裹，也可以是：
+
+```json
+{
+  "code": 0,
+  "data": {
+    "id": "video_task_id",
+    "status": "queued"
+  },
+  "msg": "ok"
+}
+```
+
+### 查询视频任务
+
+后台渠道：
+
+```http
+GET /api/v1/videos/{id}?model=grok-imagine-video
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+本地直连等价接口：
+
+```http
+GET /v1/videos/{id}
+```
+
+后台渠道查询时，前端会在 query 里带上 `model`，让后端仍可按模型选择正确渠道。
+
+期望响应：
+
+```json
+{
+  "id": "video_task_id",
+  "status": "completed"
+}
+```
+
+当前前端处理状态：
+
+| 状态 | 处理 |
+| --- | --- |
+| `completed` | 进入下载视频内容步骤。 |
+| `failed` / `cancelled` | 视为失败，显示 `error.message` 或默认错误。 |
+| 其他状态 | 继续轮询。 |
+
+前端最多轮询 120 次，每次间隔 2.5 秒。
+
+### 下载视频内容
+
+后台渠道：
+
+```http
+GET /api/v1/videos/{id}/content?model=grok-imagine-video
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+本地直连等价接口：
+
+```http
+GET /v1/videos/{id}/content
+```
+
+成功时返回视频二进制内容，例如：
+
+```http
+Content-Type: video/mp4
+```
+
+如果返回的是 JSON 错误体，前端会尝试解析 `{ code, msg }` 或 `{ error: { message } }` 并展示错误信息。
+
+## Seedance 2.0 / 火山方舟 Agent Plan 视频生成
+
+Seedance 2.0 使用火山方舟 Agent Plan 接口，不是标准 OpenAI `/v1/videos` 路径。
+
+管理后台渠道可这样配置：
+
+| 配置项 | 值 |
+| --- | --- |
+| Base URL | `https://ark.cn-beijing.volces.com/api/plan/v3` |
+| API Key | 火山方舟 API Key |
+| 模型 | `doubao-seedance-2.0` 或文档列出的其他 Seedance 模型 |
+
+Agent Plan 当前不提供 OpenAI `/models` 模型列表接口，后台“拉取模型列表”如果返回 404，需要手动填写模型名。
+
+### 本站代理路径
+
+在后台渠道模式下，前端仍请求：
+
+```text
+POST /api/v1/videos
+GET  /api/v1/videos/{id}
+```
+
+后端检测到模型名包含 `seedance` / `doubao-seedance`，或渠道 Base URL 包含 `/api/plan/v3` 时，会自动转发到火山路径：
+
+```text
+POST /contents/generations/tasks
+GET  /contents/generations/tasks/{id}
+```
+
+### 创建任务请求体
+
+Seedance 使用 JSON 请求：
+
+```json
+{
+  "model": "doubao-seedance-2.0",
+  "content": [
+    {
+      "type": "text",
+      "text": "参考素材编号：图片1、视频1。请按这些编号理解提示词中的图片、视频和音频引用。\n\n让图片1中的角色在视频1的场景里向前走，镜头缓慢推进"
+    },
+    {
+      "type": "image_url",
+      "image_url": {
+        "url": "https://example.com/reference.png"
+      },
+      "role": "reference_image"
+    },
+    {
+      "type": "video_url",
+      "video_url": {
+        "url": "https://example.com/reference.mp4"
+      },
+      "role": "reference_video"
+    },
+    {
+      "type": "audio_url",
+      "audio_url": {
+        "url": "https://example.com/reference.mp3"
+      },
+      "role": "reference_audio"
+    }
+  ],
+  "ratio": "16:9",
+  "resolution": "720p",
+  "duration": 5,
+  "generate_audio": true,
+  "watermark": false
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 是 | Seedance 模型名。 |
+| `content` | array | 是 | 文本、参考图、参考视频、参考音频内容数组。 |
+| `ratio` | string | 否 | `16:9`、`4:3`、`1:1`、`3:4`、`9:16`、`21:9`、`adaptive`。未知尺寸会归一为 `adaptive`。 |
+| `resolution` | string | 否 | `480p`、`720p`、`1080p`。fast 模型选择 `1080p` 时会降为 `720p`。 |
+| `duration` | number | 否 | `4-15` 秒，或 `-1` 表示智能时长。 |
+| `generate_audio` | boolean | 否 | 是否生成声音，默认 `true`。 |
+| `watermark` | boolean | 否 | 是否加水印，默认 `false`。 |
+
+### content 条目
+
+文本：
+
+```json
+{
+  "type": "text",
+  "text": "视频提示词"
+}
+```
+
+参考图：
+
+```json
+{
+  "type": "image_url",
+  "image_url": { "url": "https://example.com/reference.png" },
+  "role": "reference_image"
+}
+```
+
+参考视频：
+
+```json
+{
+  "type": "video_url",
+  "video_url": { "url": "https://example.com/reference.mp4" },
+  "role": "reference_video"
+}
+```
+
+参考音频：
+
+```json
+{
+  "type": "audio_url",
+  "audio_url": { "url": "https://example.com/reference.mp3" },
+  "role": "reference_audio"
+}
+```
+
+### 参考素材限制
+
+| 类型 | 数量 | 大小 | 其他限制 |
+| --- | --- | --- | --- |
+| 参考图 | 最多 9 张 | 单张 30MB 内 | 支持 `jpg/png/webp/bmp/gif/heic/heif`。 |
+| 参考视频 | 最多 3 个 | 单个 50MB 内 | 支持 `mp4/mov`；单个 2-15 秒；总时长不超过 15 秒；宽高 300-6000px；宽高比 0.4-2.5。 |
+| 参考音频 | 最多 3 个 | 单个 15MB 内 | 支持 `mp3/wav`；单个 2-15 秒；总时长不超过 15 秒。 |
+
+参考音频不能单独使用，需要同时添加参考图或参考视频。
+
+参考视频建议使用 `mp4/mov`、H.264/H.265、FPS 24-60。含真人人脸或隐私信息的普通 URL 参考视频可能被火山拒绝，此时应改用不含真人的视频、官方允许的模型产物，或已授权的 `asset://` 素材。
+
+### 查询任务响应
+
+Seedance 查询成功后，前端期待：
+
+```json
+{
+  "id": "task_id",
+  "status": "succeeded",
+  "content": {
+    "video_url": "https://example.com/result.mp4"
+  }
+}
+```
+
+也兼容业务包裹：
+
+```json
+{
+  "code": 0,
+  "data": {
+    "id": "task_id",
+    "status": "succeeded",
+    "content": {
+      "video_url": "https://example.com/result.mp4"
+    }
+  },
+  "msg": "ok"
+}
+```
+
+当前前端处理状态：
+
+| 状态 | 处理 |
+| --- | --- |
+| `succeeded` | 读取 `content.video_url`，尝试下载为 Blob；如果因 CORS 或网络限制无法下载，则保留远程 URL。 |
+| `failed` / `cancelled` / `expired` | 视为失败，展示 `error.message` 或默认错误。 |
+| 其他状态 | 继续轮询。 |
+
+前端最多轮询 120 次，每次间隔 5 秒。
+
+## 参考素材上传
+
+当 Seedance 需要引用本地图片、视频或音频时，前端会先把素材上传到项目后端，由后端生成公网可访问 URL。
+
+### 上传接口
+
+```http
+POST /api/v1/media/references
+Content-Type: multipart/form-data
+Authorization: Bearer YOUR_LOGIN_TOKEN
+```
+
+表单字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `file` | file | 是 | 参考图片、视频或音频。 |
+
+成功响应：
+
+```json
+{
+  "code": 0,
+  "data": {
+    "id": "uuid.png",
+    "url": "https://canvas.example.com/api/media/references/uuid.png",
+    "mimeType": "image/png",
+    "bytes": 123456
+  },
+  "msg": "ok"
+}
+```
+
+### 公开访问接口
+
+```http
+GET  /api/media/references/{id}
+HEAD /api/media/references/{id}
+```
+
+这个接口不要求登录，因为火山方舟服务器需要直接拉取素材。
+
+### 部署要求
+
+必须配置：
+
+```text
+PUBLIC_BASE_URL=https://你的公网域名
+```
+
+如果没有配置 `PUBLIC_BASE_URL`，上传接口会返回：
+
+```json
+{
+  "code": 1,
+  "data": null,
+  "msg": "未配置 PUBLIC_BASE_URL，无法把本地参考素材提供给火山方舟访问"
+}
+```
+
+## Base URL 规则
+
+项目构造上游 URL 时会避免重复追加版本前缀：
+
+- Base URL 已经以 `/v1` 结尾时，不再追加 `/v1`。
+- Base URL 已经以 `/api/v3` 结尾时，不再追加 `/v1`。
+- Base URL 已经以 `/api/plan/v3` 结尾时，不再追加 `/v1`，Seedance 会走 Agent Plan 路径。
+
+因此下面几类配置都可用：
+
+```text
+https://api.example.com
+https://api.example.com/v1
+https://ark.cn-beijing.volces.com/api/plan/v3
+```
+
+## 常见错误
+
+| 错误 | 可能原因 | 处理 |
+| --- | --- | --- |
+| `缺少模型名称` | 请求体没有 `model`，或 multipart 表单没有 `model` 字段。 | 检查请求参数。 |
+| `未登录或权限不足` | 没有带 JWT，或 JWT 失效。 | 重新登录，带上 `Authorization: Bearer YOUR_LOGIN_TOKEN`。 |
+| `鉴权失败，请检查 API Key、套餐权限或模型权限` | 上游返回 401/403。 | 检查渠道 API Key、模型权限和套餐权限。 |
+| `请求被限流或额度不足，请稍后重试` | 上游返回 429。 | 等待、降低并发或检查额度。 |
+| `接口没有返回图片` | 图片接口响应没有 `data[].url` 或 `data[].b64_json`。 | 检查上游响应格式。 |
+| `视频接口没有返回任务 ID` | 创建视频任务响应缺少 `id`。 | 检查上游视频接口协议。 |
+| `视频生成超时，请稍后重试` | 轮询次数耗尽仍未完成。 | 稍后重试或检查上游任务状态。 |
+| `未配置 PUBLIC_BASE_URL...` | 后端无法生成公网参考素材 URL。 | 在部署环境配置 `PUBLIC_BASE_URL`。 |
+| `参考视频疑似包含真人或隐私信息...` | 火山方舟拒绝普通 URL 的真人/隐私参考视频。 | 改用非真人素材、官方模型产物或授权 `asset://` 素材。 |
+
+## 相关源码
+
+- 后端路由：`router/router.go`
+- AI 代理：`handler/ai.go`
+- 参考素材上传和访问：`handler/media_reference.go`
+- 图片前端请求：`web/src/services/api/image.ts`
+- 视频前端请求：`web/src/services/api/video.ts`
+- Seedance 参数和限制：`web/src/lib/seedance-video.ts`

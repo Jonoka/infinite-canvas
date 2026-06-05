@@ -14,10 +14,14 @@ export type ChatCompletionMessage = {
 };
 
 type ImageApiResponse = {
-    data?: Array<Record<string, unknown>>;
+    data?: Array<Record<string, unknown>> | Record<string, unknown> | null;
     error?: { message?: string };
     code?: number;
     msg?: string;
+    id?: string;
+    task_id?: string;
+    status?: string;
+    url?: string;
 };
 
 const QUALITY_BASE: Record<string, number> = {
@@ -122,11 +126,13 @@ function parseImagePayload(payload: ImageApiResponse) {
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || "请求失败");
     }
-    const images =
-        payload.data
-            ?.map(resolveImageDataUrl)
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    if (isImageTaskPayload(payload) && !isImageTaskSuccess(payload)) {
+        throw new Error("图片任务尚未完成");
+    }
+    const images = imageItemsFromPayload(payload)
+        .map(resolveImageDataUrl)
+        .filter((value): value is string => Boolean(value))
+        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
     if (images.length === 0) {
         throw new Error("接口没有返回图片");
@@ -134,6 +140,60 @@ function parseImagePayload(payload: ImageApiResponse) {
 
     return images;
 }
+
+function imageItemsFromPayload(payload: ImageApiResponse) {
+    if (Array.isArray(payload.data)) return payload.data;
+    if (payload.data && typeof payload.data === "object") return [payload.data];
+    return [payload as Record<string, unknown>];
+}
+
+function imageTaskPayload(payload: ImageApiResponse) {
+    if (isImageTaskPayload(payload)) return payload;
+    if (payload.data && !Array.isArray(payload.data) && isImageTaskPayload(payload.data as ImageApiResponse)) return payload.data as ImageApiResponse;
+    return null;
+}
+
+function isImageTaskPayload(payload: ImageApiResponse) {
+    return Boolean(payload.task_id || payload.id) && typeof payload.status === "string";
+}
+
+function isImageTaskSuccess(payload: ImageApiResponse) {
+    return ["succeeded", "success", "completed"].includes((payload.status || "").toLowerCase());
+}
+
+function imageTaskId(payload: ImageApiResponse) {
+    return payload.task_id || payload.id || "";
+}
+
+async function resolveImageResponse(config: AiConfig, payload: ImageApiResponse, taskPath = "/images/generations") {
+    const task = imageTaskPayload(payload);
+    if (!task) return parseImagePayload(payload);
+    if (isImageTaskSuccess(task)) return parseImagePayload(task);
+
+    const id = imageTaskId(task);
+    if (!id) throw new Error("图片接口没有返回任务 ID");
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        await delay(readImageTaskDelay(task, attempt));
+        const response = await axios.get<ImageApiResponse>(aiApiUrl(config, `${taskPath}/${encodeURIComponent(id)}`), { headers: aiHeaders(config), params: config.channelMode === "remote" ? { model: config.model } : undefined });
+        const nextTask = imageTaskPayload(response.data) || response.data;
+        if (isImageTaskSuccess(nextTask)) return parseImagePayload(nextTask);
+        const status = (nextTask.status || "").toLowerCase();
+        if (["failed", "failure", "cancelled", "canceled", "expired"].includes(status)) throw new Error(nextTask.error?.message || nextTask.msg || "图片生成失败");
+        if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
+    }
+    throw new Error("图片生成超时，请稍后重试");
+}
+
+function readImageTaskDelay(task: ImageApiResponse, attempt: number) {
+    const retryAfter = Number((task as Record<string, unknown>).retry_after);
+    return Math.max(1000, Math.min(5000, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt < 4 ? 1500 : 3000));
+}
+
+function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export const __test__ = { parseImagePayload, imageTaskPayload, isImageTaskSuccess, buildGenerationRequestBody, buildEditFormData };
 
 function readAxiosError(error: unknown, fallback: string) {
     if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
@@ -194,27 +254,44 @@ function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) 
     return systemPrompt ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string) {
+function buildGenerationRequestBody(config: AiConfig, prompt: string) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
+    return {
+        model: config.model,
+        prompt: withSystemPrompt(config, prompt),
+        n,
+        ...(quality ? { quality } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
+        response_format: "b64_json",
+        output_format: IMAGE_OUTPUT_FORMAT,
+        ...(config.imageAsync === "true" ? { async: true } : {}),
+    };
+}
+
+function buildEditFormData(config: AiConfig, prompt: string) {
+    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const quality = normalizeQuality(config.quality);
+    const requestSize = resolveRequestSize(quality, config.size);
+    const formData = new FormData();
+    formData.set("model", config.model);
+    formData.set("prompt", withSystemPrompt(config, prompt));
+    formData.set("n", String(n));
+    formData.set("response_format", "b64_json");
+    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
+    if (config.imageAsync === "true") formData.set("async", "true");
+    if (quality) formData.set("quality", quality);
+    if (requestSize) formData.set("size", requestSize);
+    return formData;
+}
+
+export async function requestGeneration(config: AiConfig, prompt: string) {
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(config, "/images/generations"),
-            {
-                model: config.model,
-                prompt: withSystemPrompt(config, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                response_format: "b64_json",
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
-            {
-                headers: aiHeaders(config, "application/json"),
-            },
-        );
-        const images = parseImagePayload(response.data);
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/generations"), buildGenerationRequestBody(config, prompt), {
+            headers: aiHeaders(config, "application/json"),
+        });
+        const images = await resolveImageResponse(config, response.data);
         refreshRemoteUser(config);
         return images;
     } catch (error) {
@@ -223,28 +300,14 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[]) {
-    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
     const requestPrompt = buildImageReferencePromptText(prompt, references);
-    const formData = new FormData();
-    formData.set("model", config.model);
-    formData.set("prompt", withSystemPrompt(config, requestPrompt));
-    formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
-    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
-    if (quality) {
-        formData.set("quality", quality);
-    }
-    if (requestSize) {
-        formData.set("size", requestSize);
-    }
+    const formData = buildEditFormData(config, requestPrompt);
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, { headers: aiHeaders(config) });
-        const images = parseImagePayload(response.data);
+        const images = await resolveImageResponse(config, response.data, "/images/edits");
         refreshRemoteUser(config);
         return images;
     } catch (error) {
