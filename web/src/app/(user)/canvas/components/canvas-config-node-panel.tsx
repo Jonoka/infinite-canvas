@@ -18,13 +18,12 @@ type CanvasConfigNodePanelProps = {
     node: CanvasNodeData;
     isRunning: boolean;
     inputSummary: { textCount: number; imageCount: number; videoCount: number; audioCount: number };
-    referenceImages?: { id: string; name: string; url: string }[];
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => void;
     onGenerate: (nodeId: string) => void;
     onComposerToggle: () => void;
 };
 
-export function CanvasConfigNodePanel({ node, isRunning, inputSummary, referenceImages = [], onConfigChange, onGenerate, onComposerToggle }: CanvasConfigNodePanelProps) {
+export function CanvasConfigNodePanel({ node, isRunning, inputSummary, onConfigChange, onGenerate, onComposerToggle }: CanvasConfigNodePanelProps) {
     const globalConfig = useEffectiveConfig();
     const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -106,11 +105,8 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, reference
                 {mode === "video" ? (
                     <CanvasVideoSettingsPopover
                         config={config}
-                        referenceCount={inputSummary.imageCount}
-                        referencePreviews={orderedConfigReferenceImages(referenceImages, node.metadata?.videoReferenceOrder)}
                         placement="topRight"
                         buttonClassName="canvas-compact-control !h-10 !w-full !justify-start !rounded-lg !px-2"
-                        onReferenceOrderChange={(orderedIds) => onConfigChange(node.id, { videoReferenceOrder: orderedIds })}
                         onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))}
                     />
                 ) : mode === "image" ? (
@@ -176,12 +172,6 @@ function videoConfigPatch(key: keyof AiConfig, value: string) {
     if (key === "videoWatermark") return { watermark: value };
     if (key === "videoReferenceMode") return { videoReferenceMode: value };
     return { [key]: value };
-}
-
-function orderedConfigReferenceImages(referenceImages: { id: string; name: string; url: string }[], order?: string[]) {
-    if (!order?.length) return referenceImages;
-    const rank = new Map(order.map((id, index) => [id, index]));
-    return [...referenceImages].sort((left, right) => (rank.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.id) ?? Number.MAX_SAFE_INTEGER));
 }
 
 function audioConfigPatch(key: CanvasAudioSettingKey, value: string) {

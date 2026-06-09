@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties, type DragEvent } from "react";
 import { ArrowUp, LoaderCircle } from "lucide-react";
 import { Button } from "antd";
 
@@ -41,6 +41,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const isEditingExistingContent = hasTextContent || hasImageContent;
     const referenceImages = orderedVideoReferences(mentionReferences.filter((reference) => reference.kind === "image" && reference.active), node.metadata?.videoReferenceOrder);
     const referenceImageCount = mode === "video" ? referenceImages.length : 0;
+    const canUseFirstLastFrame = (config.model || "").toLowerCase().includes("veo") && !(config.model || "").toLowerCase().includes("components");
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : node.metadata?.prompt || "");
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? config.count : 1 });
 
@@ -68,15 +69,26 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             onPointerDown={(event) => event.stopPropagation()}
             onWheel={(event) => event.stopPropagation()}
         >
-            <CanvasResourceMentionTextarea
-                value={prompt}
-                references={mentionReferences}
-                onChange={updatePrompt}
-                onSubmit={submit}
-                className="thin-scrollbar h-24 w-full resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
-                style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text }}
-                placeholder={promptPlaceholder(mode, hasImageContent, hasTextContent)}
-            />
+            {mode === "video" && referenceImageCount > 0 ? (
+                <div className="mb-2 flex gap-1.5" onMouseDown={(event) => event.stopPropagation()}>
+                    <VideoModeButton selected={config.videoReferenceMode !== "first_last_frame" || !canUseFirstLastFrame} label="参考图" onClick={() => onConfigChange(node.id, { videoReferenceMode: "image" })} />
+                    <VideoModeButton selected={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame} label="首尾帧" disabled={!canUseFirstLastFrame} onClick={() => onConfigChange(node.id, { videoReferenceMode: "first_last_frame" })} />
+                </div>
+            ) : null}
+            <div className="flex gap-2">
+                {mode === "video" && referenceImageCount > 0 ? (
+                    <StackedReferenceImages references={referenceImages} mode={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame ? "first_last_frame" : "image"} onOrderChange={(orderedIds) => onConfigChange(node.id, { videoReferenceOrder: orderedIds })} />
+                ) : null}
+                <CanvasResourceMentionTextarea
+                    value={prompt}
+                    references={mentionReferences}
+                    onChange={updatePrompt}
+                    onSubmit={submit}
+                    className="thin-scrollbar h-24 min-w-0 flex-1 resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
+                    style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text }}
+                    placeholder={promptPlaceholder(mode, hasImageContent, hasTextContent)}
+                />
+            </div>
 
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
@@ -98,10 +110,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="video" onMissingConfig={() => openConfigDialog(true)} />
                             <CanvasVideoSettingsPopover
                                 config={config}
-                                referenceCount={referenceImageCount}
-                                referencePreviews={referenceImages.map((reference) => ({ id: reference.nodeId, name: reference.title, url: reference.previewUrl || "" })).filter((reference) => reference.url)}
                                 buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3"
-                                onReferenceOrderChange={(orderedIds) => onConfigChange(node.id, { videoReferenceOrder: orderedIds })}
                                 onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))}
                             />
                         </>
@@ -164,6 +173,61 @@ function promptPlaceholder(mode: CanvasNodeGenerationMode, hasImageContent: bool
     if (mode === "audio") return "描述要生成的音频内容";
     if (mode === "image") return hasImageContent ? "请输入你想要把这张图修改成什么" : "描述要生成的图片内容";
     return hasTextContent ? "请输入你想要将本段文本修改成什么" : "请输入你想要生成的文本内容";
+}
+
+function VideoModeButton({ selected, label, disabled = false, onClick }: { selected: boolean; label: string; disabled?: boolean; onClick: () => void }) {
+    return (
+        <button type="button" disabled={disabled} className="h-7 cursor-pointer rounded-full border px-3 text-xs transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35" style={{ borderColor: selected ? "currentColor" : "rgba(120,113,108,0.35)", background: selected ? "rgba(120,113,108,0.12)" : "transparent" }} onClick={onClick}>
+            {label}
+        </button>
+    );
+}
+
+function StackedReferenceImages({ references, mode, onOrderChange }: { references: CanvasResourceReference[]; mode: "image" | "first_last_frame"; onOrderChange: (orderedIds: string[]) => void }) {
+    const [expanded, setExpanded] = useState(false);
+    const dropOn = (event: DragEvent<HTMLDivElement>, toIndex: number) => {
+        event.preventDefault();
+        const fromIndex = Number(event.dataTransfer.getData("text/reference-index"));
+        if (!Number.isFinite(fromIndex) || fromIndex === toIndex) return;
+        onOrderChange(moveArrayItem(references, fromIndex, toIndex).map((reference) => reference.nodeId));
+    };
+
+    return (
+        <div className="relative h-24 shrink-0 transition-all duration-200" style={{ width: expanded ? Math.max(64, references.length * 56) : 82 }} onMouseEnter={() => setExpanded(true)} onMouseLeave={() => setExpanded(false)} onMouseDown={(event) => event.stopPropagation()}>
+            {references.map((reference, index) => {
+                const offset = expanded ? index * 56 : Math.min(index * 7, 18);
+                return (
+                    <div
+                        key={reference.nodeId}
+                        draggable
+                        className="absolute left-0 top-0 h-16 w-16 cursor-grab overflow-hidden rounded-xl border border-white/80 bg-stone-200 shadow-md transition-all duration-200 active:cursor-grabbing"
+                        style={{ transform: `translateX(${offset}px)`, zIndex: expanded ? index + 1 : references.length - index } as CSSProperties}
+                        onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/reference-index", String(index));
+                        }}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => dropOn(event, index)}
+                    >
+                        {reference.previewUrl ? <img src={reference.previewUrl} alt={reference.title} className="size-full object-cover" draggable={false} /> : null}
+                        <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[10px] font-medium text-white">{stackedReferenceLabel(mode, index)}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+function stackedReferenceLabel(mode: "image" | "first_last_frame", index: number) {
+    if (mode === "first_last_frame") return index === 0 ? "首帧" : index === 1 ? "尾帧" : `参考${index + 1}`;
+    return `图${index + 1}`;
+}
+
+function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
+    const next = [...items];
+    const [item] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, item);
+    return next;
 }
 
 function videoConfigPatch(key: keyof AiConfig, value: string) {

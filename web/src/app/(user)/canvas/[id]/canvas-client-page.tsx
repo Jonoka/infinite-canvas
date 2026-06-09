@@ -2413,7 +2413,6 @@ function InfiniteCanvasPage() {
                                     node={contentNode}
                                     isRunning={runningNodeId === contentNode.id}
                                     inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
-                                    referenceImages={getReferenceImagePreviews(configInputsById.get(contentNode.id) || [])}
                                     onConfigChange={handleConfigNodeChange}
                                     onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                                     onGenerate={(nodeId) => {
@@ -2959,10 +2958,6 @@ function getInputSummary(inputs: NodeGenerationInput[]) {
         videoCount: inputs.filter((input) => input.type === "video").length,
         audioCount: inputs.filter((input) => input.type === "audio").length,
     };
-}
-
-function getReferenceImagePreviews(inputs: NodeGenerationInput[]) {
-    return inputs.flatMap((input) => (input.image ? [{ id: input.nodeId, name: input.title, url: input.image.dataUrl }] : []));
 }
 
 function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
