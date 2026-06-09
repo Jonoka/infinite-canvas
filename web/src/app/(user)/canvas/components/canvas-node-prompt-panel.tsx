@@ -39,7 +39,8 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const hasTextContent = node.type === CanvasNodeType.Text && Boolean(node.metadata?.content?.trim());
     const hasImageContent = node.type === CanvasNodeType.Image && Boolean(node.metadata?.content);
     const isEditingExistingContent = hasTextContent || hasImageContent;
-    const referenceImageCount = mode === "video" ? mentionReferences.filter((reference) => reference.kind === "image" && reference.active).length : 0;
+    const referenceImages = orderedVideoReferences(mentionReferences.filter((reference) => reference.kind === "image" && reference.active), node.metadata?.videoReferenceOrder);
+    const referenceImageCount = mode === "video" ? referenceImages.length : 0;
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : node.metadata?.prompt || "");
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? config.count : 1 });
 
@@ -95,7 +96,14 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     ) : mode === "video" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="video" onMissingConfig={() => openConfigDialog(true)} />
-                            <CanvasVideoSettingsPopover config={config} referenceCount={referenceImageCount} buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
+                            <CanvasVideoSettingsPopover
+                                config={config}
+                                referenceCount={referenceImageCount}
+                                referencePreviews={referenceImages.map((reference) => ({ id: reference.nodeId, name: reference.title, url: reference.previewUrl || "" })).filter((reference) => reference.url)}
+                                buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3"
+                                onReferenceOrderChange={(orderedIds) => onConfigChange(node.id, { videoReferenceOrder: orderedIds })}
+                                onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))}
+                            />
                         </>
                     ) : mode === "audio" ? (
                         <>
@@ -164,6 +172,12 @@ function videoConfigPatch(key: keyof AiConfig, value: string) {
     if (key === "videoWatermark") return { watermark: value };
     if (key === "videoReferenceMode") return { videoReferenceMode: value };
     return { [key]: value };
+}
+
+function orderedVideoReferences(references: CanvasResourceReference[], order?: string[]) {
+    if (!order?.length) return references;
+    const rank = new Map(order.map((nodeId, index) => [nodeId, index]));
+    return [...references].sort((left, right) => (rank.get(left.nodeId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.nodeId) ?? Number.MAX_SAFE_INTEGER));
 }
 
 function audioConfigPatch(key: CanvasAudioSettingKey, value: string) {

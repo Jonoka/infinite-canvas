@@ -468,7 +468,7 @@ export default function VideoPage() {
                             </div>
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} model={model} referenceCount={references.length} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                <GenerationSettings config={effectiveConfig} model={model} references={references} updateReferences={setReferences} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                             </div>
                         </div>
 
@@ -513,7 +513,7 @@ export default function VideoPage() {
             </Drawer>
             <Drawer title="参数" placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} model={model} referenceCount={references.length} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    <GenerationSettings config={effectiveConfig} model={model} references={references} updateReferences={setReferences} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
@@ -525,7 +525,7 @@ export default function VideoPage() {
     );
 }
 
-function GenerationSettings({ config, model, referenceCount, updateConfig, openConfigDialog }: { config: AiConfig; model: string; referenceCount: number; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+function GenerationSettings({ config, model, references, updateReferences, updateConfig, openConfigDialog }: { config: AiConfig; model: string; references: ReferenceImage[]; updateReferences: (value: ReferenceImage[] | ((current: ReferenceImage[]) => ReferenceImage[])) => void; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
     return (
@@ -535,7 +535,16 @@ function GenerationSettings({ config, model, referenceCount, updateConfig, openC
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("videoModel", value)} capability="video" fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
             <div className="col-span-2">
-                <VideoSettingsPanel config={config} referenceCount={referenceCount} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />
+                <VideoSettingsPanel
+                    config={config}
+                    referenceCount={references.length}
+                    referencePreviews={references.map((reference) => ({ id: reference.id, name: reference.name, url: reference.dataUrl }))}
+                    onReferenceOrderChange={(orderedIds) => updateReferences((current) => orderReferencesById(current, orderedIds))}
+                    onConfigChange={(key, value) => updateConfig(key, value)}
+                    theme={theme}
+                    showTitle={false}
+                    className="space-y-4"
+                />
             </div>
         </>
     );
@@ -764,6 +773,11 @@ function moveListItem<T>(items: T[], index: number, offset: number) {
     const next = [...items];
     [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
     return next;
+}
+
+function orderReferencesById(references: ReferenceImage[], orderedIds: string[]) {
+    const rank = new Map(orderedIds.map((id, index) => [id, index]));
+    return [...references].sort((left, right) => (rank.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.id) ?? Number.MAX_SAFE_INTEGER));
 }
 
 function ReferenceOrderButtons({ index, total, onMove }: { index: number; total: number; onMove: (offset: number) => void }) {

@@ -2413,6 +2413,7 @@ function InfiniteCanvasPage() {
                                     node={contentNode}
                                     isRunning={runningNodeId === contentNode.id}
                                     inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
+                                    referenceImages={getReferenceImagePreviews(configInputsById.get(contentNode.id) || [])}
                                     onConfigChange={handleConfigNodeChange}
                                     onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                                     onGenerate={(nodeId) => {
@@ -2960,6 +2961,10 @@ function getInputSummary(inputs: NodeGenerationInput[]) {
     };
 }
 
+function getReferenceImagePreviews(inputs: NodeGenerationInput[]) {
+    return inputs.flatMap((input) => (input.image ? [{ id: input.nodeId, name: input.title, url: input.image.dataUrl }] : []));
+}
+
 function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
     const defaultModel = mode === "image" ? config.imageModel : mode === "video" ? config.videoModel : mode === "audio" ? config.audioModel : config.textModel;
     return {
@@ -2972,6 +2977,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
         videoGenerateAudio: node?.metadata?.generateAudio || config.videoGenerateAudio || defaultConfig.videoGenerateAudio,
         videoWatermark: node?.metadata?.watermark || config.videoWatermark || defaultConfig.videoWatermark,
+        videoReferenceMode: node?.metadata?.videoReferenceMode || config.videoReferenceMode || defaultConfig.videoReferenceMode,
         audioVoice: node?.metadata?.audioVoice || config.audioVoice || defaultConfig.audioVoice,
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,

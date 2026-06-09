@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { type DragEvent, type ReactNode } from "react";
 import { Switch } from "antd";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
@@ -36,16 +36,24 @@ const veoSecondOptions = [4, 6, 8];
 const soraSecondOptions = [4, 8, 12];
 
 
+export type VideoReferencePreview = {
+    id: string;
+    name: string;
+    url: string;
+};
+
 type VideoSettingsPanelProps = {
     config: AiConfig;
     onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoReferenceMode", value: string) => void;
     theme: CanvasTheme;
     referenceCount?: number;
+    referencePreviews?: VideoReferencePreview[];
+    onReferenceOrderChange?: (orderedIds: string[]) => void;
     showTitle?: boolean;
     className?: string;
 };
 
-export function VideoSettingsPanel({ config, onConfigChange, theme, referenceCount = 0, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
+export function VideoSettingsPanel({ config, onConfigChange, theme, referenceCount = 0, referencePreviews = [], onReferenceOrderChange, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
     if (isSeedanceVideoConfig(config)) {
         return <SeedanceVideoSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
@@ -126,6 +134,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, referenceCou
                         </div>
                         {isComponentsVideoModel(model) ? <div className="text-[11px] leading-4 opacity-55">components 模型固定使用组件/参考图模式。</div> : null}
                         {referenceMode === "first_last_frame" && referenceCount < 2 ? <div className="text-[11px] leading-4 opacity-55">首尾帧模式需要至少两张参考图。</div> : null}
+                        {referencePreviews.length ? <VideoReferencePreviewList items={referencePreviews} mode={referenceMode} theme={theme} onOrderChange={onReferenceOrderChange} /> : null}
                     </SettingGroup>
                 ) : null}
             </div>
@@ -281,6 +290,60 @@ function OptionPill({ selected, disabled = false, theme, onClick, children }: { 
             {children}
         </button>
     );
+}
+
+function VideoReferencePreviewList({ items, mode, theme, onOrderChange }: { items: VideoReferencePreview[]; mode: string; theme: CanvasTheme; onOrderChange?: (orderedIds: string[]) => void }) {
+    const moveItem = (fromIndex: number, toIndex: number) => {
+        if (!onOrderChange || fromIndex === toIndex || toIndex < 0 || toIndex >= items.length) return;
+        onOrderChange(moveArrayItem(items, fromIndex, toIndex).map((item) => item.id));
+    };
+    const dropOn = (event: DragEvent<HTMLDivElement>, toIndex: number) => {
+        event.preventDefault();
+        const fromIndex = Number(event.dataTransfer.getData("text/reference-index"));
+        if (Number.isFinite(fromIndex)) moveItem(fromIndex, toIndex);
+    };
+
+    return (
+        <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[11px] leading-4 opacity-65">
+                <span>{mode === "first_last_frame" ? "拖动调整首帧/尾帧" : "拖动调整参考图顺序"}</span>
+                <span>{items.length} 张</span>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+                {items.map((item, index) => (
+                    <div
+                        key={item.id}
+                        draggable={Boolean(onOrderChange)}
+                        className="group relative h-16 w-16 shrink-0 cursor-grab overflow-hidden rounded-lg border active:cursor-grabbing"
+                        style={{ borderColor: theme.node.stroke, background: theme.node.fill }}
+                        onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/reference-index", String(index));
+                        }}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => dropOn(event, index)}
+                    >
+                        <img src={item.url} alt={item.name} className="size-full object-cover" draggable={false} />
+                        <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[10px] font-medium text-white">
+                            {referencePreviewLabel(mode, index)}
+                        </span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function referencePreviewLabel(mode: string, index: number) {
+    if (mode === "first_last_frame") return index === 0 ? "首帧" : index === 1 ? "尾帧" : `参考${index + 1}`;
+    return `图片${index + 1}`;
+}
+
+function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
+    const next = [...items];
+    const [item] = next.splice(fromIndex, 1);
+    next.splice(toIndex, 0, item);
+    return next;
 }
 
 function SettingGroup({ title, color, children }: { title: string; color: string; children: ReactNode }) {

@@ -38,9 +38,10 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         .map((input) => input.text)
         .filter(Boolean)
         .join("\n\n");
-    const referenceImages = inputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
-    const referenceVideos = inputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
-    const referenceAudios = inputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
+    const orderedInputs = applyVideoReferenceOrder(inputs, sourceNode?.metadata?.videoReferenceOrder);
+    const referenceImages = orderedInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
+    const referenceVideos = orderedInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
+    const referenceAudios = orderedInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
 
     return {
         prompt: upstreamText ? `${prompt}\n\n${upstreamText}` : prompt,
@@ -155,6 +156,12 @@ function generationLabel(type: NodeGenerationInput["type"], index: number) {
     if (type === "video") return seedanceReferenceLabel("video", index);
     if (type === "audio") return seedanceReferenceLabel("audio", index);
     return `文本${index + 1}`;
+}
+
+function applyVideoReferenceOrder(inputs: NodeGenerationInput[], order?: string[]) {
+    if (!order?.length) return inputs;
+    const rank = new Map(order.map((nodeId, index) => [nodeId, index]));
+    return [...inputs].sort((left, right) => (rank.get(left.nodeId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.nodeId) ?? Number.MAX_SAFE_INTEGER));
 }
 
 function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {

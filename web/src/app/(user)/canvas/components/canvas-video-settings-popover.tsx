@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Settings2 } from "lucide-react";
 import { Button } from "antd";
 
-import { VideoSettingsPanel, videoResolutionLabel, videoSecondsLabel, videoSizeLabel } from "@/components/video-settings-panel";
+import { VideoSettingsPanel, type VideoReferencePreview, videoResolutionLabel, videoSecondsLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { AiConfig } from "@/stores/use-config-store";
@@ -14,11 +14,13 @@ type CanvasVideoSettingsPopoverProps = {
     config: AiConfig;
     onConfigChange: (key: keyof AiConfig, value: string) => void;
     referenceCount?: number;
+    referencePreviews?: VideoReferencePreview[];
+    onReferenceOrderChange?: (orderedIds: string[]) => void;
     buttonClassName?: string;
     placement?: "topLeft" | "top" | "topRight" | "bottomLeft" | "bottom" | "bottomRight";
 };
 
-export function CanvasVideoSettingsPopover({ config, onConfigChange, referenceCount = 0, buttonClassName, placement = "topLeft" }: CanvasVideoSettingsPopoverProps) {
+export function CanvasVideoSettingsPopover({ config, onConfigChange, referenceCount = 0, referencePreviews = [], onReferenceOrderChange, buttonClassName, placement = "topLeft" }: CanvasVideoSettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const buttonRef = useRef<HTMLSpanElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -46,7 +48,7 @@ export function CanvasVideoSettingsPopover({ config, onConfigChange, referenceCo
         };
     }, [open]);
 
-    const panel = open && buttonRect ? <VideoSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} referenceCount={referenceCount} onConfigChange={onConfigChange} /> : null;
+    const panel = open && buttonRect ? <VideoSettingsPortal buttonRect={buttonRect} panelRef={panelRef} placement={placement} theme={theme} config={config} referenceCount={referenceCount} referencePreviews={referencePreviews} onReferenceOrderChange={onReferenceOrderChange} onConfigChange={onConfigChange} /> : null;
 
     return (
         <>
@@ -69,6 +71,8 @@ function VideoSettingsPortal({
     theme,
     config,
     referenceCount,
+    referencePreviews,
+    onReferenceOrderChange,
     onConfigChange,
 }: {
     buttonRect: DOMRect;
@@ -77,6 +81,8 @@ function VideoSettingsPortal({
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
     config: AiConfig;
     referenceCount: number;
+    referencePreviews: VideoReferencePreview[];
+    onReferenceOrderChange?: (orderedIds: string[]) => void;
     onConfigChange: (key: keyof AiConfig, value: string) => void;
 }) {
     const width = 356;
@@ -109,7 +115,7 @@ function VideoSettingsPortal({
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
         >
-            <VideoSettingsPanel config={config} referenceCount={referenceCount} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" />
+            <VideoSettingsPanel config={config} referenceCount={referenceCount} referencePreviews={referencePreviews} onReferenceOrderChange={onReferenceOrderChange} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" />
         </div>,
         document.body,
     );
