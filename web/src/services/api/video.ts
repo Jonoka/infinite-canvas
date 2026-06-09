@@ -82,15 +82,8 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 }
 
 async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[]): Promise<VideoGenerationTask> {
-    const body = new FormData();
-    body.append("model", model);
-    body.append("prompt", prompt);
-    body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
-    if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
-    body.append("resolution_name", normalizeVideoResolution(config.vquality));
-    body.append("preset", "normal");
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => body.append("input_reference[]", file));
+    const body = buildOpenAIVideoFormData(config, model, prompt, files);
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config) })).data);
         if (!created.id) throw new Error("视频接口没有返回任务 ID");
@@ -98,6 +91,30 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     } catch (error) {
         throw new Error(readAxiosError(error, "视频任务创建失败"));
     }
+}
+
+function buildOpenAIVideoFormData(config: AiConfig, model: string, prompt: string, files: File[]) {
+    const body = new FormData();
+    body.append("model", model);
+    body.append("prompt", prompt);
+    body.append("seconds", normalizeVideoSeconds(config.videoSeconds));
+    if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
+    body.append("resolution_name", normalizeVideoResolution(config.vquality));
+    body.append("preset", "normal");
+    body.append("type", String(openAIVideoReferenceType(model, files.length)));
+    if (files.length) body.append("reference_mode", openAIVideoReferenceMode(model));
+    files.forEach((file) => body.append("input_reference[]", file));
+    return body;
+}
+
+function openAIVideoReferenceType(model: string, fileCount: number) {
+    if (fileCount === 0) return 1;
+    if (model.toLowerCase().includes("components")) return 3;
+    return 2;
+}
+
+function openAIVideoReferenceMode(model: string) {
+    return model.toLowerCase().includes("components") ? "components" : "image";
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
@@ -330,3 +347,5 @@ function isPublicMediaUrl(value: string) {
 function delay(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+export const __test__ = { buildOpenAIVideoFormData, openAIVideoReferenceType, openAIVideoReferenceMode };
