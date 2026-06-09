@@ -1,9 +1,6 @@
 services:
   app:
-    image: infinite-canvas:jonoka-local
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/jonoka/infinite-canvas:jonoka-dev
     container_name: infinite-canvas
     env_file:
       - .env
