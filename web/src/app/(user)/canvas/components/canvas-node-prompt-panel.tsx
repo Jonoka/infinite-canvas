@@ -71,11 +71,11 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         >
             {mode === "video" && referenceImageCount > 0 ? (
                 <div className="mb-2 flex gap-1.5" onMouseDown={(event) => event.stopPropagation()}>
-                    <VideoModeButton selected={config.videoReferenceMode !== "first_last_frame" || !canUseFirstLastFrame} label="参考图" onClick={() => onConfigChange(node.id, { videoReferenceMode: "image" })} />
-                    <VideoModeButton selected={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame} label="首尾帧" disabled={!canUseFirstLastFrame} onClick={() => onConfigChange(node.id, { videoReferenceMode: "first_last_frame" })} />
+                    <VideoModeButton selected={config.videoReferenceMode !== "first_last_frame" || !canUseFirstLastFrame} theme={theme} label="参考图" onClick={() => onConfigChange(node.id, { videoReferenceMode: "image" })} />
+                    <VideoModeButton selected={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame} theme={theme} label="首尾帧" disabled={!canUseFirstLastFrame} onClick={() => onConfigChange(node.id, { videoReferenceMode: "first_last_frame" })} />
                 </div>
             ) : null}
-            <div className="flex gap-2">
+            <div className="flex w-full gap-2">
                 {mode === "video" && referenceImageCount > 0 ? (
                     <StackedReferenceImages references={referenceImages} mode={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame ? "first_last_frame" : "image"} onOrderChange={(orderedIds) => onConfigChange(node.id, { videoReferenceOrder: orderedIds })} />
                 ) : null}
@@ -175,9 +175,19 @@ function promptPlaceholder(mode: CanvasNodeGenerationMode, hasImageContent: bool
     return hasTextContent ? "请输入你想要将本段文本修改成什么" : "请输入你想要生成的文本内容";
 }
 
-function VideoModeButton({ selected, label, disabled = false, onClick }: { selected: boolean; label: string; disabled?: boolean; onClick: () => void }) {
+function VideoModeButton({ selected, theme, label, disabled = false, onClick }: { selected: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; label: string; disabled?: boolean; onClick: () => void }) {
     return (
-        <button type="button" disabled={disabled} className="h-7 cursor-pointer rounded-full border px-3 text-xs transition hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-35" style={{ borderColor: selected ? "currentColor" : "rgba(120,113,108,0.35)", background: selected ? "rgba(120,113,108,0.12)" : "transparent" }} onClick={onClick}>
+        <button
+            type="button"
+            disabled={disabled}
+            className="h-7 cursor-pointer rounded-full border px-3 text-xs font-medium transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35"
+            style={{
+                borderColor: selected ? theme.node.text : theme.node.stroke,
+                background: selected ? theme.node.text : theme.node.fill,
+                color: selected ? theme.node.fill : theme.node.text,
+            }}
+            onClick={onClick}
+        >
             {label}
         </button>
     );
