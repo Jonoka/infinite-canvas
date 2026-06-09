@@ -114,20 +114,19 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, referenceCou
                         {isCustomVideoSeconds(model) ? <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} /> : null}
                     </div>
                 </SettingGroup>
-                {referenceCount > 0 ? (
-                    <SettingGroup title="图生视频模式" color={theme.node.muted}>
-                        <div className="grid grid-cols-2 gap-2.5">
-                            <OptionPill selected={referenceMode === "image"} theme={theme} onClick={() => onConfigChange("videoReferenceMode", "image")}>
-                                参考图
-                            </OptionPill>
-                            <OptionPill selected={referenceMode === "first_last_frame"} disabled={!canUseFirstLastFrame(model)} theme={theme} onClick={() => onConfigChange("videoReferenceMode", "first_last_frame")}>
-                                首尾帧
-                            </OptionPill>
-                        </div>
-                        {isComponentsVideoModel(model) ? <div className="text-[11px] leading-4 opacity-55">components 模型固定使用组件/参考图模式。</div> : null}
-                        {referenceMode === "first_last_frame" && referenceCount < 2 ? <div className="text-[11px] leading-4 opacity-55">首尾帧模式需要至少两张参考图。</div> : null}
-                    </SettingGroup>
-                ) : null}
+                <SettingGroup title="图生视频模式" color={theme.node.muted}>
+                    <div className="grid grid-cols-2 gap-2.5">
+                        <OptionPill selected={referenceMode === "image"} theme={theme} onClick={() => onConfigChange("videoReferenceMode", "image")}>
+                            参考图
+                        </OptionPill>
+                        <OptionPill selected={referenceMode === "first_last_frame"} disabled={!canUseFirstLastFrame(model)} theme={theme} onClick={() => onConfigChange("videoReferenceMode", "first_last_frame")}>
+                            首尾帧
+                        </OptionPill>
+                    </div>
+                    {referenceCount === 0 ? <div className="text-[11px] leading-4 opacity-55">没有参考图时会按文生视频提交。</div> : null}
+                    {isComponentsVideoModel(model) ? <div className="text-[11px] leading-4 opacity-55">components 模型固定使用组件/参考图模式。</div> : null}
+                    {referenceMode === "first_last_frame" && referenceCount < 2 ? <div className="text-[11px] leading-4 opacity-55">首尾帧模式需要至少两张参考图。</div> : null}
+                </SettingGroup>
             </div>
         </ImageSettingsTheme>
     );
