@@ -8,9 +8,18 @@ import { boolConfig, isSeedanceFastModel, isSeedanceVideoConfig, normalizeSeedan
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
 
-const resolutionOptions = [
+const defaultResolutionOptions = [
     { value: "720", label: "720p" },
     { value: "480", label: "480p" },
+];
+
+const veoResolutionOptions = [
+    { value: "720", label: "720p" },
+    { value: "1080", label: "1080p" },
+];
+
+const soraResolutionOptions = [
+    { value: "720", label: "720p" },
 ];
 
 const sizeOptions = [
@@ -22,25 +31,33 @@ const sizeOptions = [
     { value: "auto", label: "auto", width: 0, height: 0 },
 ];
 
-const secondOptions = [6, 10, 12, 16, 20];
+const defaultSecondOptions = [6, 10, 12, 16, 20];
+const veoSecondOptions = [4, 6, 8];
+const soraSecondOptions = [4, 8, 12];
+
 
 type VideoSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark", value: string) => void;
+    onConfigChange: (key: "vquality" | "size" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoReferenceMode", value: string) => void;
     theme: CanvasTheme;
+    referenceCount?: number;
     showTitle?: boolean;
     className?: string;
 };
 
-export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
+export function VideoSettingsPanel({ config, onConfigChange, theme, referenceCount = 0, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5" }: VideoSettingsPanelProps) {
     if (isSeedanceVideoConfig(config)) {
         return <SeedanceVideoSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} />;
     }
 
-    const seconds = config.videoSeconds || "6";
+    const model = config.model || config.videoModel;
+    const resolutionOptions = videoResolutionOptions(model);
+    const secondOptions = videoSecondOptions(model);
+    const seconds = normalizeVideoSecondValue(config.videoSeconds, model);
+    const referenceMode = normalizeVideoReferenceMode(config.videoReferenceMode, model);
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
-    const resolution = normalizeVideoResolutionValue(config.vquality);
+    const resolution = normalizeVideoResolutionValue(config.vquality, model);
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 720));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
@@ -57,7 +74,7 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 {item.label}
                             </OptionPill>
                         ))}
-                        <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} />
+                        {isCustomVideoResolution(model) ? <ResolutionInput value={resolution} theme={theme} onChange={(value) => onConfigChange("vquality", value)} /> : null}
                     </div>
                 </SettingGroup>
                 <SettingGroup title="尺寸" color={theme.node.muted}>
@@ -94,9 +111,23 @@ export function VideoSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 {value}s
                             </OptionPill>
                         ))}
-                        <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                        {isCustomVideoSeconds(model) ? <NumberInput value={seconds} min={1} max={20} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} /> : null}
                     </div>
                 </SettingGroup>
+                {referenceCount > 0 ? (
+                    <SettingGroup title="图生视频模式" color={theme.node.muted}>
+                        <div className="grid grid-cols-2 gap-2.5">
+                            <OptionPill selected={referenceMode === "image"} theme={theme} onClick={() => onConfigChange("videoReferenceMode", "image")}>
+                                参考图
+                            </OptionPill>
+                            <OptionPill selected={referenceMode === "first_last_frame"} disabled={!canUseFirstLastFrame(model)} theme={theme} onClick={() => onConfigChange("videoReferenceMode", "first_last_frame")}>
+                                首尾帧
+                            </OptionPill>
+                        </div>
+                        {isComponentsVideoModel(model) ? <div className="text-[11px] leading-4 opacity-55">components 模型固定使用组件/参考图模式。</div> : null}
+                        {referenceMode === "first_last_frame" && referenceCount < 2 ? <div className="text-[11px] leading-4 opacity-55">首尾帧模式需要至少两张参考图。</div> : null}
+                    </SettingGroup>
+                ) : null}
             </div>
         </ImageSettingsTheme>
     );
@@ -166,8 +197,8 @@ function SeedanceVideoSettingsPanel({ config, onConfigChange, theme, showTitle, 
     );
 }
 
-export function videoResolutionLabel(value: string) {
-    return `${normalizeVideoResolutionValue(value)}p`;
+export function videoResolutionLabel(value: string, model = "") {
+    return `${normalizeVideoResolutionValue(value, model)}p`;
 }
 
 export function videoSizeLabel(value: string) {
@@ -178,9 +209,9 @@ export function videoSizeLabel(value: string) {
     return sizeOptions.find((item) => item.value === size)?.label || size;
 }
 
-export function videoSecondsLabel(value: string) {
+export function videoSecondsLabel(value: string, model = "") {
     if (String(value).trim() === "-1") return "智能";
-    return `${value || "6"}s`;
+    return `${normalizeVideoSecondValue(value, model)}s`;
 }
 
 export function normalizeVideoSizeValue(value: string) {
@@ -189,10 +220,59 @@ export function normalizeVideoSizeValue(value: string) {
     return ["9:16", "2:3", "3:4"].includes(value) ? "720x1280" : "1280x720";
 }
 
-export function normalizeVideoResolutionValue(value: string) {
-    if (value === "480p" || value === "low") return "480";
-    if (value === "720p" || value === "auto" || value === "high" || value === "medium") return "720";
-    return value.replace(/p$/i, "") || "720";
+export function normalizeVideoResolutionValue(value: string, model = "") {
+    const normalized = value === "480p" || value === "low" ? "480" : value === "720p" || value === "auto" || value === "high" || value === "medium" ? "720" : value.replace(/p$/i, "") || "720";
+    const options = videoResolutionOptions(model);
+    if (isCustomVideoResolution(model)) return normalized;
+    return options.some((item) => item.value === normalized) ? normalized : options[0].value;
+}
+
+export function normalizeVideoSecondValue(value: string, model = "") {
+    const normalized = Number(value) || 6;
+    const options = videoSecondOptions(model);
+    if (isCustomVideoSeconds(model)) return String(normalized);
+    return String(options.includes(normalized) ? normalized : options[0]);
+}
+
+function videoResolutionOptions(model: string) {
+    if (isVeoVideoModel(model)) return veoResolutionOptions;
+    if (isSoraVideoModel(model)) return soraResolutionOptions;
+    return defaultResolutionOptions;
+}
+
+function videoSecondOptions(model: string) {
+    if (isVeoVideoModel(model)) return veoSecondOptions;
+    if (isSoraVideoModel(model)) return soraSecondOptions;
+    return defaultSecondOptions;
+}
+
+function normalizeVideoReferenceMode(value: string, model: string) {
+    if (!canUseFirstLastFrame(model)) return "image";
+    return value === "first_last_frame" ? "first_last_frame" : "image";
+}
+
+function canUseFirstLastFrame(model: string) {
+    return isVeoVideoModel(model) && !isComponentsVideoModel(model);
+}
+
+function isCustomVideoResolution(model: string) {
+    return !isVeoVideoModel(model) && !isSoraVideoModel(model);
+}
+
+function isCustomVideoSeconds(model: string) {
+    return !isVeoVideoModel(model) && !isSoraVideoModel(model);
+}
+
+function isVeoVideoModel(model: string) {
+    return model.toLowerCase().includes("veo");
+}
+
+function isSoraVideoModel(model: string) {
+    return model.toLowerCase().includes("sora");
+}
+
+function isComponentsVideoModel(model: string) {
+    return model.toLowerCase().includes("components");
 }
 
 function OptionPill({ selected, disabled = false, theme, onClick, children }: { selected: boolean; disabled?: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {

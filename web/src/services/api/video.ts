@@ -83,6 +83,7 @@ export async function storeGeneratedVideo(result: VideoGenerationResult): Promis
 
 async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: string, references: ReferenceImage[]): Promise<VideoGenerationTask> {
     const files = await Promise.all(references.slice(0, 7).map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    assertOpenAIVideoReferences(config, model, files.length);
     const body = buildOpenAIVideoFormData(config, model, prompt, files);
     try {
         const created = unwrapVideoResponse((await axios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, { headers: aiHeaders(config) })).data);
@@ -101,20 +102,32 @@ function buildOpenAIVideoFormData(config: AiConfig, model: string, prompt: strin
     if (normalizeVideoSize(config.size)) body.append("size", normalizeVideoSize(config.size)!);
     body.append("resolution_name", normalizeVideoResolution(config.vquality));
     body.append("preset", "normal");
-    body.append("type", String(openAIVideoReferenceType(model, files.length)));
-    if (files.length) body.append("reference_mode", openAIVideoReferenceMode(model));
-    files.forEach((file) => body.append("input_reference[]", file));
+    const referenceMode = openAIVideoReferenceMode(config, model, files.length);
+    body.append("type", String(openAIVideoReferenceType(files.length, referenceMode)));
+    if (referenceMode) body.append("reference_mode", referenceMode);
+    if (referenceMode === "first_last_frame") {
+        body.append("first_frame", files[0]);
+        body.append("last_frame", files[1]);
+    } else {
+        files.forEach((file) => body.append("input_reference[]", file));
+    }
     return body;
 }
 
-function openAIVideoReferenceType(model: string, fileCount: number) {
+function assertOpenAIVideoReferences(config: AiConfig, model: string, fileCount: number) {
+    if (openAIVideoReferenceMode(config, model, fileCount) === "first_last_frame" && fileCount < 2) throw new Error("首尾帧模式需要至少上传两张参考图");
+}
+
+function openAIVideoReferenceType(fileCount: number, referenceMode: string) {
     if (fileCount === 0) return 1;
-    if (model.toLowerCase().includes("components")) return 3;
+    if (referenceMode === "components") return 3;
     return 2;
 }
 
-function openAIVideoReferenceMode(model: string) {
-    return model.toLowerCase().includes("components") ? "components" : "image";
+function openAIVideoReferenceMode(config: Pick<AiConfig, "videoReferenceMode">, model: string, fileCount: number) {
+    if (fileCount === 0) return "";
+    if (model.toLowerCase().includes("components")) return "components";
+    return config.videoReferenceMode === "first_last_frame" ? "first_last_frame" : "image";
 }
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask): Promise<VideoGenerationTaskState> {
