@@ -84,7 +84,8 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     references={mentionReferences}
                     onChange={updatePrompt}
                     onSubmit={submit}
-                    className="thin-scrollbar h-24 min-w-0 flex-1 resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
+                    containerClassName="min-w-0 flex-1"
+                    className="thin-scrollbar h-24 w-full resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
                     style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text }}
                     placeholder={promptPlaceholder(mode, hasImageContent, hasTextContent)}
                 />
@@ -195,27 +196,38 @@ function VideoModeButton({ selected, theme, label, disabled = false, onClick }: 
 
 function StackedReferenceImages({ references, mode, onOrderChange }: { references: CanvasResourceReference[]; mode: "image" | "first_last_frame"; onOrderChange: (orderedIds: string[]) => void }) {
     const [expanded, setExpanded] = useState(false);
+    const [dragging, setDragging] = useState(false);
     const dropOn = (event: DragEvent<HTMLDivElement>, toIndex: number) => {
         event.preventDefault();
         const fromIndex = Number(event.dataTransfer.getData("text/reference-index"));
+        setDragging(false);
+        setExpanded(false);
         if (!Number.isFinite(fromIndex) || fromIndex === toIndex) return;
         onOrderChange(moveArrayItem(references, fromIndex, toIndex).map((reference) => reference.nodeId));
     };
 
     return (
-        <div className="relative h-24 w-20 shrink-0" onMouseEnter={() => setExpanded(true)} onMouseLeave={() => setExpanded(false)} onMouseDown={(event) => event.stopPropagation()}>
-            <div className="absolute left-0 top-0 h-24" style={{ width: expanded ? Math.max(80, references.length * 56) : 80 }}>
+        <div className="relative h-24 w-20 shrink-0" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="absolute left-0 top-0 h-24" style={{ width: expanded || dragging ? Math.max(80, references.length * 56) : 80 }}>
                 {references.map((reference, index) => {
-                    const offset = expanded ? index * 56 : Math.min(index * 7, 18);
+                    const offset = expanded || dragging ? index * 56 : Math.min(index * 7, 18);
                     return (
                         <div
                             key={reference.nodeId}
                             draggable
                             className="absolute left-0 top-0 h-16 w-16 cursor-grab overflow-hidden rounded-xl border border-white/80 bg-stone-200 shadow-md transition-transform duration-200 active:cursor-grabbing"
-                            style={{ transform: `translateX(${offset}px)`, zIndex: expanded ? 30 + index : references.length - index } as CSSProperties}
+                            style={{ transform: `translateX(${offset}px)`, zIndex: expanded || dragging ? 30 + index : references.length - index } as CSSProperties}
+                            onMouseEnter={() => setExpanded(true)}
+                            onMouseLeave={() => setExpanded(false)}
                             onDragStart={(event) => {
+                                setDragging(true);
+                                setExpanded(true);
                                 event.dataTransfer.effectAllowed = "move";
                                 event.dataTransfer.setData("text/reference-index", String(index));
+                            }}
+                            onDragEnd={() => {
+                                setDragging(false);
+                                setExpanded(false);
                             }}
                             onDragOver={(event) => event.preventDefault()}
                             onDrop={(event) => dropOn(event, index)}
