@@ -22,6 +22,13 @@ assert.equal(imageToVideo.getAll("input_reference[]").length, 2);
 assert.equal(imageToVideo.has("first_frame"), false);
 assert.equal(imageToVideo.has("last_frame"), false);
 
+const firstLastOnlyFirst = __test__.buildOpenAIVideoFormData(firstLastConfig as never, "veo3.1-pro", "prompt", [file]);
+assert.equal(firstLastOnlyFirst.get("type"), "2");
+assert.equal(firstLastOnlyFirst.get("reference_mode"), "first_last_frame");
+assert.equal((firstLastOnlyFirst.get("first_frame") as File).name, "ref.png");
+assert.equal(firstLastOnlyFirst.has("last_frame"), false);
+assert.equal(firstLastOnlyFirst.getAll("input_reference[]").length, 0);
+
 const firstLast = __test__.buildOpenAIVideoFormData(firstLastConfig as never, "veo3.1-pro", "prompt", [file, file2]);
 assert.equal(firstLast.get("type"), "2");
 assert.equal(firstLast.get("reference_mode"), "first_last_frame");
