@@ -203,27 +203,29 @@ function StackedReferenceImages({ references, mode, onOrderChange }: { reference
     };
 
     return (
-        <div className="relative h-24 shrink-0 transition-all duration-200" style={{ width: expanded ? Math.max(64, references.length * 56) : 82 }} onMouseEnter={() => setExpanded(true)} onMouseLeave={() => setExpanded(false)} onMouseDown={(event) => event.stopPropagation()}>
-            {references.map((reference, index) => {
-                const offset = expanded ? index * 56 : Math.min(index * 7, 18);
-                return (
-                    <div
-                        key={reference.nodeId}
-                        draggable
-                        className="absolute left-0 top-0 h-16 w-16 cursor-grab overflow-hidden rounded-xl border border-white/80 bg-stone-200 shadow-md transition-all duration-200 active:cursor-grabbing"
-                        style={{ transform: `translateX(${offset}px)`, zIndex: expanded ? index + 1 : references.length - index } as CSSProperties}
-                        onDragStart={(event) => {
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/reference-index", String(index));
-                        }}
-                        onDragOver={(event) => event.preventDefault()}
-                        onDrop={(event) => dropOn(event, index)}
-                    >
-                        {reference.previewUrl ? <img src={reference.previewUrl} alt={reference.title} className="size-full object-cover" draggable={false} /> : null}
-                        <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[10px] font-medium text-white">{stackedReferenceLabel(mode, index)}</span>
-                    </div>
-                );
-            })}
+        <div className="relative h-24 w-20 shrink-0" onMouseEnter={() => setExpanded(true)} onMouseLeave={() => setExpanded(false)} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="absolute left-0 top-0 h-24" style={{ width: expanded ? Math.max(80, references.length * 56) : 80 }}>
+                {references.map((reference, index) => {
+                    const offset = expanded ? index * 56 : Math.min(index * 7, 18);
+                    return (
+                        <div
+                            key={reference.nodeId}
+                            draggable
+                            className="absolute left-0 top-0 h-16 w-16 cursor-grab overflow-hidden rounded-xl border border-white/80 bg-stone-200 shadow-md transition-transform duration-200 active:cursor-grabbing"
+                            style={{ transform: `translateX(${offset}px)`, zIndex: expanded ? 30 + index : references.length - index } as CSSProperties}
+                            onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/reference-index", String(index));
+                            }}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => dropOn(event, index)}
+                        >
+                            {reference.previewUrl ? <img src={reference.previewUrl} alt={reference.title} className="size-full object-cover" draggable={false} /> : null}
+                            <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[10px] font-medium text-white">{stackedReferenceLabel(mode, index)}</span>
+                        </div>
+                    );
+                })}
+            </div>
         </div>
     );
 }
