@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type CSSProperties, type DragEvent } from "react";
-import { ArrowUp, LoaderCircle } from "lucide-react";
+import { ArrowUp, LoaderCircle, Square } from "lucide-react";
 import { Button } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
@@ -25,13 +25,13 @@ type CanvasNodePromptPanelProps = {
     onPromptChange: (nodeId: string, prompt: string) => void;
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => void;
     onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
+    onStop: (nodeId: string) => void;
     mentionReferences?: CanvasResourceReference[];
     onImageSettingsOpenChange?: (open: boolean) => void;
 };
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, onStop, mentionReferences = [], onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
-    const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const mode = defaultMode(node.type);
@@ -43,7 +43,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const referenceImageCount = mode === "video" ? referenceImages.length : 0;
     const canUseFirstLastFrame = (config.model || "").toLowerCase().includes("veo") && !(config.model || "").toLowerCase().includes("components");
     const [prompt, setPrompt] = useState(isEditingExistingContent ? "" : node.metadata?.prompt || "");
-    const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? config.count : 1 });
+    const credits = requestCreditCost({ channelMode: config.channelMode, model: config.model, count: mode === "image" ? config.count : 1 });
 
     useEffect(() => {
         setPrompt(isEditingExistingContent ? "" : node.metadata?.prompt || "");
@@ -70,12 +70,12 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
             onWheel={(event) => event.stopPropagation()}
         >
             {mode === "video" && referenceImageCount > 0 ? (
-                <div className="mb-2 flex gap-1.5" onMouseDown={(event) => event.stopPropagation()}>
+                <div className="mb-2 flex items-center gap-2 text-xs">
                     <VideoModeButton selected={config.videoReferenceMode !== "first_last_frame" || !canUseFirstLastFrame} theme={theme} label="参考图" onClick={() => onConfigChange(node.id, { videoReferenceMode: "image" })} />
                     <VideoModeButton selected={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame} theme={theme} label="首尾帧" disabled={!canUseFirstLastFrame} onClick={() => onConfigChange(node.id, { videoReferenceMode: "first_last_frame" })} />
                 </div>
             ) : null}
-            <div className="flex w-full gap-2">
+            <div className="flex min-w-0 gap-2">
                 {mode === "video" && referenceImageCount > 0 ? (
                     <StackedReferenceImages references={referenceImages} mode={config.videoReferenceMode === "first_last_frame" && canUseFirstLastFrame ? "first_last_frame" : "image"} onOrderChange={(orderedIds) => onConfigChange(node.id, { videoReferenceOrder: orderedIds })} />
                 ) : null}
@@ -84,8 +84,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     references={mentionReferences}
                     onChange={updatePrompt}
                     onSubmit={submit}
-                    containerClassName="min-w-0 flex-1"
-                    className="thin-scrollbar h-24 w-full resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
+                    className="thin-scrollbar h-24 min-w-0 flex-1 resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
                     style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text }}
                     placeholder={promptPlaceholder(mode, hasImageContent, hasTextContent)}
                 />
@@ -109,11 +108,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                     ) : mode === "video" ? (
                         <>
                             <ModelPicker config={config} value={config.model} onChange={(model) => onConfigChange(node.id, { model })} capability="video" onMissingConfig={() => openConfigDialog(true)} />
-                            <CanvasVideoSettingsPopover
-                                config={config}
-                                buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3"
-                                onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))}
-                            />
+                            <CanvasVideoSettingsPopover config={config} buttonClassName="!h-10 !max-w-[170px] !justify-start !rounded-full !px-3" onConfigChange={(key, value) => onConfigChange(node.id, videoConfigPatch(key, value))} />
                         </>
                     ) : mode === "audio" ? (
                         <>
@@ -127,16 +122,27 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 <Button
                     type="primary"
                     className="!h-10 !min-w-16 shrink-0 !rounded-full !px-3"
-                    disabled={isRunning || !prompt.trim()}
-                    onClick={submit}
-                    aria-label="生成"
+                    danger={isRunning}
+                    disabled={!isRunning && !prompt.trim()}
+                    onClick={() => (isRunning ? onStop(node.id) : submit())}
+                    aria-label={isRunning ? "停止生成" : "生成"}
                 >
                     <span className="flex items-center gap-1.5">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
-                            <CreditSymbol />
-                            {credits.toLocaleString()}
-                        </span>
-                        {isRunning ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+                        {isRunning ? (
+                            <>
+                                <LoaderCircle className="size-4 animate-spin" />
+                                <Square className="size-3.5 fill-current" />
+                                <span className="text-xs font-medium">停止</span>
+                            </>
+                        ) : (
+                            <>
+                                <span className="inline-flex items-center gap-1 text-xs font-medium tabular-nums">
+                                    <CreditSymbol />
+                                    {credits.toLocaleString()}
+                                </span>
+                                <ArrowUp className="size-4" />
+                            </>
+                        )}
                     </span>
                 </Button>
             </div>
@@ -155,7 +161,6 @@ function buildNodeConfig(globalConfig: AiConfig, node: CanvasNodeData, mode: Can
         model: node.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : globalConfig.model || defaultConfig.model),
         quality: node.metadata?.quality || globalConfig.quality || defaultConfig.quality,
         size: node.metadata?.size || globalConfig.size || defaultConfig.size,
-        imageAsync: node.metadata?.imageAsync || globalConfig.imageAsync || defaultConfig.imageAsync,
         videoSeconds: node.metadata?.seconds || globalConfig.videoSeconds || defaultConfig.videoSeconds,
         vquality: node.metadata?.vquality || globalConfig.vquality || defaultConfig.vquality,
         videoGenerateAudio: node.metadata?.generateAudio || globalConfig.videoGenerateAudio || defaultConfig.videoGenerateAudio,
@@ -176,19 +181,17 @@ function promptPlaceholder(mode: CanvasNodeGenerationMode, hasImageContent: bool
     return hasTextContent ? "请输入你想要将本段文本修改成什么" : "请输入你想要生成的文本内容";
 }
 
-function VideoModeButton({ selected, theme, label, disabled = false, onClick }: { selected: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; label: string; disabled?: boolean; onClick: () => void }) {
+function videoConfigPatch(key: keyof AiConfig, value: string) {
+    if (key === "videoSeconds") return { seconds: value };
+    if (key === "videoGenerateAudio") return { generateAudio: value };
+    if (key === "videoWatermark") return { watermark: value };
+    if (key === "videoReferenceMode") return { videoReferenceMode: value };
+    return { [key]: value };
+}
+
+function VideoModeButton({ selected, disabled, theme, label, onClick }: { selected: boolean; disabled?: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; label: string; onClick: () => void }) {
     return (
-        <button
-            type="button"
-            disabled={disabled}
-            className="h-7 cursor-pointer rounded-full border px-3 text-xs font-medium transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-35"
-            style={{
-                borderColor: selected ? theme.node.text : theme.node.stroke,
-                background: selected ? theme.node.text : theme.node.fill,
-                color: selected ? theme.node.fill : theme.node.text,
-            }}
-            onClick={onClick}
-        >
+        <button type="button" disabled={disabled} onClick={onClick} className="rounded-full px-2.5 py-1 transition disabled:cursor-not-allowed disabled:opacity-40" style={{ background: selected ? theme.toolbar.activeBg : "transparent", color: selected ? theme.toolbar.activeText : theme.node.muted }}>
             {label}
         </button>
     );
@@ -197,54 +200,29 @@ function VideoModeButton({ selected, theme, label, disabled = false, onClick }: 
 function StackedReferenceImages({ references, mode, onOrderChange }: { references: CanvasResourceReference[]; mode: "image" | "first_last_frame"; onOrderChange: (orderedIds: string[]) => void }) {
     const [expanded, setExpanded] = useState(false);
     const [dragging, setDragging] = useState(false);
-    const dropOn = (event: DragEvent<HTMLDivElement>, toIndex: number) => {
+    const handleDrop = (event: DragEvent<HTMLDivElement>, toIndex: number) => {
         event.preventDefault();
         const fromIndex = Number(event.dataTransfer.getData("text/reference-index"));
         setDragging(false);
-        setExpanded(false);
         if (!Number.isFinite(fromIndex) || fromIndex === toIndex) return;
         onOrderChange(moveArrayItem(references, fromIndex, toIndex).map((reference) => reference.nodeId));
     };
-
     return (
-        <div className="relative h-24 w-20 shrink-0" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="relative h-24 shrink-0" style={{ width: expanded || dragging ? Math.max(80, references.length * 56) : 80 }} onMouseEnter={() => setExpanded(true)} onMouseLeave={() => !dragging && setExpanded(false)}>
             <div className="absolute left-0 top-0 h-24" style={{ width: expanded || dragging ? Math.max(80, references.length * 56) : 80 }}>
                 {references.map((reference, index) => {
-                    const offset = expanded || dragging ? index * 56 : Math.min(index * 7, 18);
+                    const offset = expanded || dragging ? index * 56 : Math.min(index * 8, 24);
+                    const label = mode === "first_last_frame" ? (index === 0 ? "首帧" : index === 1 ? "尾帧" : `参考${index + 1}`) : `图${index + 1}`;
                     return (
-                        <div
-                            key={reference.nodeId}
-                            draggable
-                            className="absolute left-0 top-0 h-16 w-16 cursor-grab overflow-hidden rounded-xl border border-white/80 bg-stone-200 shadow-md transition-transform duration-200 active:cursor-grabbing"
-                            style={{ transform: `translateX(${offset}px)`, zIndex: expanded || dragging ? 30 + index : references.length - index } as CSSProperties}
-                            onMouseEnter={() => setExpanded(true)}
-                            onMouseLeave={() => setExpanded(false)}
-                            onDragStart={(event) => {
-                                setDragging(true);
-                                setExpanded(true);
-                                event.dataTransfer.effectAllowed = "move";
-                                event.dataTransfer.setData("text/reference-index", String(index));
-                            }}
-                            onDragEnd={() => {
-                                setDragging(false);
-                                setExpanded(false);
-                            }}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={(event) => dropOn(event, index)}
-                        >
+                        <div key={reference.nodeId} draggable onDragStart={(event) => { event.dataTransfer.setData("text/reference-index", String(index)); setDragging(true); }} onDragEnd={() => setDragging(false)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => handleDrop(event, index)} className="absolute top-0 h-24 w-20 cursor-grab overflow-hidden rounded-xl border shadow-lg transition-transform active:cursor-grabbing" style={{ transform: `translateX(${offset}px)`, zIndex: expanded || dragging ? 30 + index : references.length - index } as CSSProperties}>
                             {reference.previewUrl ? <img src={reference.previewUrl} alt={reference.title} className="size-full object-cover" draggable={false} /> : null}
-                            <span className="absolute left-1 top-1 rounded bg-black/65 px-1 py-0.5 text-[10px] font-medium text-white">{stackedReferenceLabel(mode, index)}</span>
+                            <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 text-[10px] text-white">{label}</span>
                         </div>
                     );
                 })}
             </div>
         </div>
     );
-}
-
-function stackedReferenceLabel(mode: "image" | "first_last_frame", index: number) {
-    if (mode === "first_last_frame") return index === 0 ? "首帧" : index === 1 ? "尾帧" : `参考${index + 1}`;
-    return `图${index + 1}`;
 }
 
 function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
@@ -254,17 +232,9 @@ function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
     return next;
 }
 
-function videoConfigPatch(key: keyof AiConfig, value: string) {
-    if (key === "videoSeconds") return { seconds: value };
-    if (key === "videoGenerateAudio") return { generateAudio: value };
-    if (key === "videoWatermark") return { watermark: value };
-    if (key === "videoReferenceMode") return { videoReferenceMode: value };
-    return { [key]: value };
-}
-
 function orderedVideoReferences(references: CanvasResourceReference[], order?: string[]) {
     if (!order?.length) return references;
-    const rank = new Map(order.map((nodeId, index) => [nodeId, index]));
+    const rank = new Map(order.map((id, index) => [id, index]));
     return [...references].sort((left, right) => (rank.get(left.nodeId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.nodeId) ?? Number.MAX_SAFE_INTEGER));
 }
 
