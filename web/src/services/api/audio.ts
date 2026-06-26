@@ -2,20 +2,10 @@ import axios from "axios";
 
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { aiApiUrl, aiRequestOptions, assertAiConfig } from "@/services/api/ai-client";
 
 type RequestOptions = { signal?: AbortSignal };
-
-function aiApiUrl(config: AiConfig, path: string) {
-    return buildApiUrl(config.baseUrl, path);
-}
-
-function aiHeaders(config: AiConfig) {
-    return {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-    };
-}
 
 export async function requestAudioGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<Blob> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.audioModel);
@@ -35,7 +25,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { headers: aiHeaders(requestConfig), responseType: "blob", signal: options?.signal },
+            aiRequestOptions(requestConfig, { headers: { "Content-Type": "application/json" }, responseType: "blob", signal: options?.signal }),
         );
         await assertAudioBlob(response.data);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });
@@ -50,9 +40,7 @@ export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<U
 }
 
 function assertAudioConfig(config: AiConfig, model: string) {
-    if (!model) throw new Error("请先配置音频模型");
-    if (!config.baseUrl.trim()) throw new Error("请先配置 Base URL");
-    if (!config.apiKey.trim()) throw new Error("请先配置 API Key");
+    assertAiConfig(config, model, "音频");
     if (config.apiFormat === "gemini") throw new Error("Gemini 调用格式暂不支持音频生成，请使用 OpenAI 格式渠道");
 }
 

@@ -6,6 +6,7 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 export type ApiCallFormat = "openai" | "gemini";
+export type ApiMode = "direct" | "newapi";
 
 export type ModelChannel = {
     id: string;
@@ -13,6 +14,8 @@ export type ModelChannel = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    apiMode: ApiMode;
+    group: string;
     models: string[];
 };
 
@@ -21,6 +24,8 @@ export type AiConfig = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    apiMode: ApiMode;
+    group: string;
     channels: ModelChannel[];
     model: string;
     imageModel: string;
@@ -69,6 +74,8 @@ export const defaultConfig: AiConfig = {
     baseUrl: OPENAI_BASE_URL,
     apiKey: "",
     apiFormat: "openai",
+    apiMode: "direct",
+    group: "",
     channels: [
         {
             id: "default",
@@ -76,6 +83,8 @@ export const defaultConfig: AiConfig = {
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
+            apiMode: "direct",
+            group: "",
             models: ["gpt-image-2", "grok-imagine-video", "gpt-5.5", "gpt-4o-mini-tts"],
         },
     ],
@@ -170,7 +179,7 @@ function modelListKey(capability: ModelCapability) {
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = resolveModelChannel(config, model);
-    return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
+    return Boolean(model.trim() && channel.baseUrl.trim() && (isNewApiMode(channel) ? channel.group.trim() : channel.apiKey.trim()));
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -217,6 +226,8 @@ export const useConfigStore = create<ConfigStore>()(
                         ...config,
                         channelMode: "local",
                         apiFormat: normalizeApiFormat(config.apiFormat),
+                        apiMode: normalizeApiMode(config.apiMode),
+                        group: config.group || "",
                         channels,
                         models,
                         imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
@@ -265,6 +276,8 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,
+        apiMode: normalizeApiMode(channel?.apiMode),
+        group: channel?.group?.trim() || "",
         models: uniqueRawModels(channel?.models || []),
     };
 }
@@ -314,7 +327,7 @@ export function resolveModelChannel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
     const model = decoded?.model || value;
     const matched = decoded ? config.channels.find((channel) => channel.id === decoded.channelId) : config.channels.find((channel) => channel.models.includes(model));
-    return matched || config.channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, models: config.models.map(modelOptionName) });
+    return matched || config.channels[0] || createModelChannel({ id: "default", name: "默认渠道", baseUrl: config.baseUrl, apiKey: config.apiKey, apiFormat: config.apiFormat, apiMode: config.apiMode, group: config.group, models: config.models.map(modelOptionName) });
 }
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
@@ -325,6 +338,8 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
+        apiMode: channel.apiMode,
+        group: channel.group,
     };
 }
 
@@ -346,6 +361,8 @@ function normalizeChannels(config: AiConfig) {
                 baseUrl: config.baseUrl || defaultConfig.baseUrl,
                 apiKey: config.apiKey || "",
                 apiFormat: config.apiFormat || defaultConfig.apiFormat,
+                apiMode: config.apiMode || defaultConfig.apiMode,
+                group: config.group || "",
                 models: uniqueRawModels([
                     ...(config.models || []),
                     config.model,
@@ -368,6 +385,14 @@ function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
     return apiFormat === "gemini" ? "gemini" : "openai";
 }
 
+function normalizeApiMode(apiMode: unknown): ApiMode {
+    return apiMode === "newapi" ? "newapi" : "direct";
+}
+
+export function isNewApiMode(config: Pick<AiConfig | ModelChannel, "apiMode">) {
+    return config.apiMode === "newapi";
+}
+
 function uniqueRawModels(models: string[]) {
     return Array.from(new Set((models || []).map((model) => modelOptionName(model).trim()).filter(Boolean)));
 }
@@ -380,7 +405,7 @@ export function buildApiUrl(baseUrl: string, path: string) {
     let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
     normalizedBaseUrl = normalizeArkPlanBaseUrl(normalizedBaseUrl);
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/canvas/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
 }
 

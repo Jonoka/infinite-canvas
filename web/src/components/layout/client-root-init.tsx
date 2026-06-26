@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { App } from "antd";
 
-import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
+import { createModelChannel, useConfigStore, type ApiMode } from "@/stores/use-config-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -18,14 +18,24 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         const searchParams = new URLSearchParams(window.location.search);
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
         const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
-        if (!baseUrl && !apiKey) return;
+        const mode: ApiMode = (searchParams.get("mode") || "").toLowerCase() === "newapi" ? "newapi" : "direct";
+        const group = searchParams.get("group") || "";
+        if (!baseUrl && !apiKey && mode !== "newapi" && !group) return;
         handledConfigParams.current = true;
+        searchParams.delete("mode");
         searchParams.delete("baseUrl");
         searchParams.delete("baseurl");
         searchParams.delete("apiKey");
         searchParams.delete("apikey");
+        searchParams.delete("group");
         window.history.replaceState(null, "", `${window.location.pathname}${searchParams.size ? `?${searchParams}` : ""}${window.location.hash}`);
         const firstChannel = config.channels[0];
+        const patch = {
+            ...(baseUrl ? { baseUrl } : {}),
+            ...(apiKey && mode !== "newapi" ? { apiKey } : {}),
+            apiMode: mode,
+            group,
+        };
         updateConfig(
             "channels",
             firstChannel
@@ -33,17 +43,18 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                       index === 0
                           ? {
                                 ...channel,
-                                ...(baseUrl ? { baseUrl } : {}),
-                                ...(apiKey ? { apiKey } : {}),
+                                ...patch,
                             }
                           : channel,
                   )
-                : [createModelChannel({ id: "default", name: "默认渠道", baseUrl: baseUrl || undefined, apiKey: apiKey || "" })],
+                : [createModelChannel({ id: "default", name: "默认渠道", baseUrl: baseUrl || undefined, apiKey: mode === "newapi" ? "" : apiKey || "", apiMode: mode, group })],
         );
         if (baseUrl) updateConfig("baseUrl", baseUrl);
-        if (apiKey) updateConfig("apiKey", apiKey);
+        updateConfig("apiMode", mode);
+        updateConfig("group", group);
+        if (apiKey && mode !== "newapi") updateConfig("apiKey", apiKey);
         openConfigDialog(false);
-        message.success("已导入本地直连配置");
+        message.success(mode === "newapi" ? "已导入 New API 登录态配置" : "已导入本地直连配置");
     }, [config.channels, message, openConfigDialog, updateConfig]);
 
     return <>{children}</>;

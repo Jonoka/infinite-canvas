@@ -9,7 +9,7 @@ import { fetchChannelModels } from "@/services/api/image";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { createModelChannel, defaultBaseUrlForApiFormat, filterModelsByCapability, modelOptionLabel, modelOptionsFromChannels, normalizeModelOptionValue, useConfigStore, type AiConfig, type ApiCallFormat, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { createModelChannel, defaultBaseUrlForApiFormat, filterModelsByCapability, isNewApiMode, modelOptionLabel, modelOptionsFromChannels, normalizeModelOptionValue, useConfigStore, type AiConfig, type ApiCallFormat, type ApiMode, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -37,6 +37,11 @@ const modelGroups: ModelGroup[] = [
 const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
     { label: "OpenAI", value: "openai" },
     { label: "Gemini", value: "gemini" },
+];
+
+const apiModeOptions: Array<{ label: string; value: ApiMode }> = [
+    { label: "本地直连", value: "direct" },
+    { label: "New API 登录态", value: "newapi" },
 ];
 
 const webdavDomainKeys: AppSyncDomainKey[] = ["canvas", "assets", "image-workbench", "video-workbench"];
@@ -81,7 +86,7 @@ export function AppConfigModal() {
     };
 
     const finishConfig = () => {
-        const ready = config.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length);
+        const ready = config.channels.some((channel) => channel.baseUrl.trim() && (isNewApiMode(channel) ? channel.group.trim() : channel.apiKey.trim()) && channel.models.length);
         setConfigDialogOpen(false);
         if (!ready) return;
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
@@ -114,9 +119,11 @@ export function AppConfigModal() {
         updateChannels(config.channels.filter((channel) => channel.id !== id));
     };
 
+    const isChannelRunnable = (channel: ModelChannel) => Boolean(channel.baseUrl.trim() && (isNewApiMode(channel) ? channel.group.trim() : channel.apiKey.trim()));
+
     const refreshChannelModels = async (channel: ModelChannel) => {
-        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
-            message.error("请先填写该渠道的 Base URL 和 API Key");
+        if (!isChannelRunnable(channel)) {
+            message.error(isNewApiMode(channel) ? "请先填写该渠道的 Base URL 和 New API 分组" : "请先填写该渠道的 Base URL 和 API Key");
             return;
         }
         setLoadingChannelId(channel.id);
@@ -132,9 +139,9 @@ export function AppConfigModal() {
     };
 
     const refreshAllModels = async () => {
-        const runnable = config.channels.filter((channel) => channel.baseUrl.trim() && channel.apiKey.trim());
+        const runnable = config.channels.filter(isChannelRunnable);
         if (!runnable.length) {
-            message.error("请先填写至少一个渠道的 Base URL 和 API Key");
+            message.error("请先填写至少一个可用渠道的 Base URL，以及 API Key 或 New API 分组");
             return;
         }
         setLoadingChannelId("all");
@@ -262,7 +269,7 @@ export function AppConfigModal() {
                                                 <div className="min-w-0">
                                                     <div className="truncate text-sm font-semibold">{channel.name || "未命名渠道"}</div>
                                                     <div className="mt-1 text-xs text-stone-500">
-                                                        {apiFormatLabel(channel.apiFormat)} · 已保存 {channel.models.length} 个模型
+                                                        {apiFormatLabel(channel.apiFormat)} · {isNewApiMode(channel) ? "New API 登录态" : "本地直连"} · 已保存 {channel.models.length} 个模型
                                                     </div>
                                                 </div>
                                                 <div className="flex shrink-0 gap-2">
@@ -276,15 +283,24 @@ export function AppConfigModal() {
                                                 <Form.Item label="渠道名称" className="mb-0">
                                                     <Input value={channel.name} onChange={(event) => updateChannel(channel.id, { name: event.target.value })} />
                                                 </Form.Item>
+                                                <Form.Item label="调用模式" className="mb-0">
+                                                    <Segmented block value={channel.apiMode} options={apiModeOptions} onChange={(value) => updateChannel(channel.id, { apiMode: value as ApiMode, apiKey: value === "newapi" ? "" : channel.apiKey })} />
+                                                </Form.Item>
                                                 <Form.Item label="调用格式" className="mb-0">
                                                     <Select value={channel.apiFormat} options={apiFormatOptions} onChange={(value: ApiCallFormat) => updateChannelApiFormat(channel, value)} />
                                                 </Form.Item>
-                                                <Form.Item label="Base URL" className="mb-0">
+                                                <Form.Item label="Base URL" extra={isNewApiMode(channel) ? "填写 New API 的 canvas 代理地址，例如 https://api.example.com/canvas" : undefined} className="mb-0">
                                                     <Input value={channel.baseUrl} onChange={(event) => updateChannel(channel.id, { baseUrl: event.target.value })} />
                                                 </Form.Item>
-                                                <Form.Item label="API Key" className="mb-0">
-                                                    <Input.Password value={channel.apiKey} onChange={(event) => updateChannel(channel.id, { apiKey: event.target.value })} />
-                                                </Form.Item>
+                                                {isNewApiMode(channel) ? (
+                                                    <Form.Item label="New API 分组" extra="会作为 group 参数随请求发送；浏览器使用 New API 登录态，无需 API Key。" className="mb-0">
+                                                        <Input value={channel.group} onChange={(event) => updateChannel(channel.id, { group: event.target.value })} />
+                                                    </Form.Item>
+                                                ) : (
+                                                    <Form.Item label="API Key" className="mb-0">
+                                                        <Input.Password value={channel.apiKey} onChange={(event) => updateChannel(channel.id, { apiKey: event.target.value })} />
+                                                    </Form.Item>
+                                                )}
                                                 <Form.Item label="模型列表" className="mb-0 md:col-span-2">
                                                     <Select mode="tags" showSearch allowClear maxTagCount="responsive" placeholder="输入模型名，或点击拉取模型" value={channel.models} onChange={(models) => updateChannel(channel.id, { models })} />
                                                 </Form.Item>
@@ -447,6 +463,8 @@ function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
         baseUrl: channels[0]?.baseUrl || config.baseUrl,
         apiKey: channels[0]?.apiKey || config.apiKey,
         apiFormat: channels[0]?.apiFormat || config.apiFormat,
+        apiMode: channels[0]?.apiMode || config.apiMode,
+        group: channels[0]?.group || config.group,
         imageModels,
         videoModels,
         textModels,

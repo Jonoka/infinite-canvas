@@ -1,6 +1,7 @@
 import axios from "axios";
 
-import { buildApiUrl, resolveModelRequestConfig, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { buildApiUrl, isNewApiMode, resolveModelRequestConfig, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { aiApiUrl, aiHeaders, aiRequestOptions } from "@/services/api/ai-client";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
@@ -244,7 +245,7 @@ async function resolveImageResponse(config: AiConfig, payload: ImageApiResponse,
     if (!id) throw new Error("图片接口没有返回任务 ID");
     for (let attempt = 0; attempt < 120; attempt += 1) {
         await delay(readImageTaskDelay(task, attempt), options?.signal);
-        const response = await axios.get<ImageApiResponse>(aiApiUrl(config, `${taskPath}/${encodeURIComponent(id)}`), { headers: aiHeaders(config), signal: options?.signal });
+        const response = await axios.get<ImageApiResponse>(aiApiUrl(config, `${taskPath}/${encodeURIComponent(id)}`), aiRequestOptions(config, { signal: options?.signal }));
         const nextTask = imageTaskPayload(response.data) || response.data;
         if (isImageTaskSuccess(nextTask)) return parseImagePayload(nextTask);
         const status = (nextTask.status || "").toLowerCase();
@@ -296,17 +297,6 @@ function readStatusError(status: number | undefined, fallback: string) {
 function withSystemPrompt(config: AiConfig, prompt: string) {
     const systemPrompt = config.systemPrompt.trim();
     return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-}
-
-function aiApiUrl(config: AiConfig, path: string) {
-    return buildApiUrl(config.baseUrl, path);
-}
-
-function aiHeaders(config: AiConfig, contentType?: string) {
-    return {
-        Authorization: `Bearer ${config.apiKey}`,
-        ...(contentType ? { "Content-Type": contentType } : {}),
-    };
 }
 
 function geminiBaseUrl(config: Pick<AiConfig, "baseUrl">) {
@@ -462,6 +452,7 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
         method: "POST",
         headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
         body: JSON.stringify({ ...body, stream: true }),
+        credentials: isNewApiMode(config) ? "include" : "same-origin",
         signal: options?.signal,
     });
     if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
@@ -723,10 +714,10 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(requestConfig, "/images/generations"),
             buildGenerationRequestBody({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, imageAsync: config.imageAsync }, prompt),
-            {
+            aiRequestOptions(requestConfig, {
                 headers: aiHeaders(requestConfig, "application/json"),
                 signal: options?.signal,
-            },
+            }),
         );
         const images = await resolveImageResponse(requestConfig, response.data, "/images/generations", options);
         return images;
@@ -753,7 +744,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, aiRequestOptions(requestConfig, { signal: options?.signal }));
         const images = await resolveImageResponse(requestConfig, response.data, "/images/edits", options);
         return images;
     } catch (error) {
@@ -798,7 +789,7 @@ export async function requestToolResponse(config: AiConfig, messages: ResponseIn
     }
 }
 
-export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat">) {
+export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "apiMode" | "group">) {
     try {
         if (config.apiFormat === "gemini") {
             const response = await axios.get<GeminiPayload>(geminiApiUrl({ ...defaultGeminiConfig, ...config }), { headers: geminiHeaders({ ...defaultGeminiConfig, ...config }) });
@@ -808,11 +799,7 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
                 .filter((id): id is string => Boolean(id))
                 .sort((a, b) => a.localeCompare(b));
         }
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
-            headers: {
-                Authorization: `Bearer ${config.apiKey}`,
-            },
-        });
+        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(aiApiUrl(config as AiConfig, "/models"), aiRequestOptions(config as AiConfig));
         return (response.data.data || [])
             .map((model) => model.id)
             .filter((id): id is string => Boolean(id))
@@ -823,13 +810,15 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
 }
 
 export async function fetchChannelModels(channel: ModelChannel) {
-    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat, apiMode: channel.apiMode, group: channel.group });
 }
 
-const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {
+const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "apiMode" | "group" | "model" | "systemPrompt"> = {
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
     apiFormat: "gemini",
+    apiMode: "direct",
+    group: "",
     model: "",
     systemPrompt: "",
 };
