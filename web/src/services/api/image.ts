@@ -679,7 +679,7 @@ function buildGenerationRequestBody(config: AiConfig, prompt: string) {
         n: Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1))),
         ...(quality ? { quality } : {}),
         ...(requestSize ? { size: requestSize } : {}),
-        ...(config.imageAsync === "true" ? { async: true } : {}),
+        ...(shouldUseAsyncImageRequest(config) ? { async: true } : {}),
         response_format: "b64_json",
         output_format: IMAGE_OUTPUT_FORMAT,
     };
@@ -696,8 +696,13 @@ function buildEditFormData(config: AiConfig, prompt: string) {
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);
     if (quality) formData.set("quality", quality);
     if (requestSize) formData.set("size", requestSize);
-    if (config.imageAsync === "true") formData.set("async", "true");
+    if (shouldUseAsyncImageRequest(config)) formData.set("async", "true");
     return formData;
+}
+
+function shouldUseAsyncImageRequest(config: Pick<AiConfig, "apiMode" | "model" | "imageAsync">) {
+    if (config.imageAsync === "true") return true;
+    return isNewApiMode(config) && /^gpt-image-/i.test(config.model.trim());
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {

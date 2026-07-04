@@ -26,6 +26,9 @@ assert.equal(Object.prototype.hasOwnProperty.call(generationBodyWithoutAsync, "a
 const generationBodyWithAsync = __test__.buildGenerationRequestBody({ quality: "auto", size: "1:1", count: "1", imageAsync: "true", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
 assert.equal(generationBodyWithAsync.async, true, "async should be true when switch is on");
 
+const generationBodyWithNewApiGptImage = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality: "high", size: "3840x2160", count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
+assert.equal(generationBodyWithNewApiGptImage.async, true, "newapi gpt-image requests should use async automatically to avoid long sync response disconnects");
+
 const editFormWithoutAsync = __test__.buildEditFormData({ quality: "auto", size: "1:1", count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
 assert.equal(editFormWithoutAsync.has("async"), false, "edit async should be omitted when switch is off");
 
