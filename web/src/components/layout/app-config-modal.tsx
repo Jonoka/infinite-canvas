@@ -289,7 +289,7 @@ export function AppConfigModal() {
                                                 <Form.Item label="调用格式" className="mb-0">
                                                     <Select value={channel.apiFormat} options={apiFormatOptions} onChange={(value: ApiCallFormat) => updateChannelApiFormat(channel, value)} />
                                                 </Form.Item>
-                                                <Form.Item label="Base URL" extra={isNewApiMode(channel) ? "填写 New API 的 canvas 代理地址，例如 https://api.example.com/canvas" : undefined} className="mb-0">
+                                                <Form.Item label="Base URL" extra={isNewApiMode(channel) ? "填写 New API 根地址，例如 https://api.example.com；不要填写画布前端地址" : undefined} className="mb-0">
                                                     <Input value={channel.baseUrl} onChange={(event) => updateChannel(channel.id, { baseUrl: event.target.value })} />
                                                 </Form.Item>
                                                 {isNewApiMode(channel) ? (

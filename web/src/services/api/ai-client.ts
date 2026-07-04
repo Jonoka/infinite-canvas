@@ -3,9 +3,24 @@ import type { AxiosRequestConfig } from "axios";
 import { buildApiUrl, isNewApiMode, type AiConfig } from "@/stores/use-config-store";
 
 export function aiApiUrl(config: AiConfig, path: string) {
-    const url = new URL(buildApiUrl(config.baseUrl, path));
+    const url = new URL(buildApiUrl(isNewApiMode(config) ? normalizeNewApiBaseUrl(config.baseUrl) : config.baseUrl, path));
     if (isNewApiMode(config)) url.searchParams.set("group", config.group.trim());
     return url.toString();
+}
+
+function normalizeNewApiBaseUrl(baseUrl: string) {
+    try {
+        const url = new URL(baseUrl.trim());
+        const path = url.pathname.replace(/\/+$/, "");
+        const lowerPath = path.toLowerCase();
+        if (lowerPath === "/canvas") url.pathname = "";
+        else if (lowerPath === "/canvas/v1") url.pathname = "/v1";
+        url.search = "";
+        url.hash = "";
+        return url.toString().replace(/\/+$/, "");
+    } catch {
+        return baseUrl;
+    }
 }
 
 export function aiHeaders(config: AiConfig, contentType?: string) {

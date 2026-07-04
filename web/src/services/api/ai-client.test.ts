@@ -19,7 +19,8 @@ const newApiConfig = {
     group: "codex",
 } as AiConfig;
 
-assert.equal(aiApiUrl(newApiConfig, "/images/generations"), "https://api.example.com/canvas/v1/images/generations?group=codex");
+assert.equal(aiApiUrl(newApiConfig, "/images/generations"), "https://api.example.com/v1/images/generations?group=codex");
+assert.equal(aiApiUrl({ ...newApiConfig, baseUrl: "https://api.example.com/canvas/v1" }, "/images/generations"), "https://api.example.com/v1/images/generations?group=codex");
 assert.deepEqual(aiHeaders(newApiConfig, "application/json"), { "Content-Type": "application/json" });
 assert.equal(aiRequestOptions(newApiConfig).withCredentials, true);
 assert.doesNotThrow(() => assertAiConfig(newApiConfig, "gpt-image-2", "生图"));
