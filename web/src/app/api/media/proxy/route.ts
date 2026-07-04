@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 80 * 1024 * 1024;
 const ALLOWED_PROTOCOLS = new Set(["https:"]);
 
 export async function GET(request: NextRequest) {

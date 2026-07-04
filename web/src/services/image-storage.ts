@@ -28,13 +28,27 @@ export async function uploadImage(input: string | Blob): Promise<UploadedImage> 
 }
 
 async function fetchImageBlob(url: string) {
+    if (/^https?:\/\//i.test(url)) {
+        const proxyResponse = await fetch(`/api/media/proxy?url=${encodeURIComponent(url)}`);
+        if (!proxyResponse.ok) throw new Error(await readImageProxyError(proxyResponse));
+        return proxyResponse.blob();
+    }
     const response = await fetch(url).catch(() => fetch(`/api/media/proxy?url=${encodeURIComponent(url)}`));
     if (!response.ok) {
         const proxyResponse = await fetch(`/api/media/proxy?url=${encodeURIComponent(url)}`);
-        if (!proxyResponse.ok) throw new Error("图片下载失败");
+        if (!proxyResponse.ok) throw new Error(await readImageProxyError(proxyResponse));
         return proxyResponse.blob();
     }
     return response.blob();
+}
+
+async function readImageProxyError(response: Response) {
+    try {
+        const payload = (await response.json()) as { msg?: string; message?: string };
+        return payload.msg || payload.message || "图片下载失败";
+    } catch {
+        return "图片下载失败";
+    }
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
