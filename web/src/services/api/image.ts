@@ -680,7 +680,7 @@ function buildGenerationRequestBody(config: AiConfig, prompt: string) {
         ...(quality ? { quality } : {}),
         ...(requestSize ? { size: requestSize } : {}),
         ...(shouldUseAsyncImageRequest(config) ? { async: true } : {}),
-        response_format: "b64_json",
+        response_format: imageResponseFormat(config),
         output_format: IMAGE_OUTPUT_FORMAT,
     };
 }
@@ -692,7 +692,7 @@ function buildEditFormData(config: AiConfig, prompt: string) {
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, prompt));
     formData.set("n", String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)))));
-    formData.set("response_format", "b64_json");
+    formData.set("response_format", imageResponseFormat(config));
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);
     if (quality) formData.set("quality", quality);
     if (requestSize) formData.set("size", requestSize);
@@ -703,6 +703,10 @@ function buildEditFormData(config: AiConfig, prompt: string) {
 function shouldUseAsyncImageRequest(config: Pick<AiConfig, "apiMode" | "model" | "imageAsync">) {
     if (config.imageAsync === "true") return true;
     return isNewApiMode(config) && /^gpt-image-/i.test(config.model.trim());
+}
+
+function imageResponseFormat(config: Pick<AiConfig, "apiMode" | "model">) {
+    return isNewApiMode(config) && /^gpt-image-/i.test(config.model.trim()) ? "url" : "b64_json";
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
