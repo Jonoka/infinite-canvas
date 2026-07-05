@@ -16,6 +16,8 @@ export type UploadedImage = {
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
 const objectUrls = new Map<string, string>();
+const CANVAS_IMAGE_CONTENT_PATH = /^\/canvas\/v1\/images\/tasks\/[^/]+\/content\/\d+$/;
+const DEFAULT_CANVAS_API_BASE_URL = "https://jo2api.com";
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await fetchImageBlob(input) : input;
@@ -28,6 +30,13 @@ export async function uploadImage(input: string | Blob): Promise<UploadedImage> 
 }
 
 async function fetchImageBlob(url: string) {
+    const canvasContentUrl = canvasImageContentUrl(url);
+    if (canvasContentUrl) {
+        const response = await fetch(canvasContentUrl, { credentials: "include" });
+        if (!response.ok) throw new Error(`图片下载失败：${response.status}`);
+        return response.blob();
+    }
+
     if (/^https?:\/\//i.test(url)) {
         const proxyResponse = await fetch(`/api/media/proxy?url=${encodeURIComponent(url)}`);
         if (!proxyResponse.ok) throw new Error(await readImageProxyError(proxyResponse));
@@ -40,6 +49,15 @@ async function fetchImageBlob(url: string) {
         return proxyResponse.blob();
     }
     return response.blob();
+}
+
+function canvasImageContentUrl(url: string) {
+    if (!CANVAS_IMAGE_CONTENT_PATH.test(url)) return "";
+    return new URL(url, canvasApiBaseUrl()).toString();
+}
+
+function canvasApiBaseUrl() {
+    return (process.env.NEXT_PUBLIC_CANVAS_IMAGE_API_BASE_URL || DEFAULT_CANVAS_API_BASE_URL).replace(/\/+$/, "");
 }
 
 async function readImageProxyError(response: Response) {
