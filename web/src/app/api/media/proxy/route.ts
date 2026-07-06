@@ -6,7 +6,7 @@ export const maxDuration = 60;
 const MAX_IMAGE_BYTES = 80 * 1024 * 1024;
 const ALLOWED_PROTOCOLS = new Set(["https:"]);
 const CANVAS_IMAGE_CONTENT_PATH = /^\/canvas\/v1\/images\/tasks\/[^/]+\/content\/\d+$/;
-const DEFAULT_CANVAS_API_BASE_URL = "https://jo2api.com";
+const DEFAULT_CANVAS_API_BASE_URL = "https://api.jo2api.com";
 
 export async function GET(request: NextRequest) {
     const rawUrl = request.nextUrl.searchParams.get("url") || "";
