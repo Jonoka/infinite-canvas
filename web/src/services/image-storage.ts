@@ -16,7 +16,7 @@ export type UploadedImage = {
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
 const objectUrls = new Map<string, string>();
-const CANVAS_IMAGE_CONTENT_PATH = /^\/canvas\/v1\/images\/tasks\/[^/]+\/content\/\d+$/;
+const CANVAS_IMAGE_CONTENT_PATH = /^\/canvas\/v1\/images\/tasks\/[^/]+\/content\/\d+(?:\?.*)?$/;
 const DEFAULT_CANVAS_API_BASE_URL = "https://api.jo2api.com";
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
