@@ -245,16 +245,22 @@ export const useConfigStore = create<ConfigStore>()(
                         videoReferenceMode: config.videoReferenceMode || "image",
                         canvasImageCount: config.canvasImageCount || "3",
                         imageAsync: config.imageAsync || "false",
-                        imageModels: Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels, channels) : filterModelsByCapability(models, "image"),
-                        videoModels: Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels, channels) : filterModelsByCapability(models, "video"),
-                        textModels: Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels, channels) : filterModelsByCapability(models, "text"),
-                        audioModels: Array.isArray(persistedConfig.audioModels) ? normalizeModelList(config.audioModels, channels) : filterModelsByCapability(models, "audio"),
+                        imageModels: capabilityModelList(config.imageModels, persistedConfig.imageModels, channels, models, "image"),
+                        videoModels: capabilityModelList(config.videoModels, persistedConfig.videoModels, channels, models, "video"),
+                        textModels: capabilityModelList(config.textModels, persistedConfig.textModels, channels, models, "text"),
+                        audioModels: capabilityModelList(config.audioModels, persistedConfig.audioModels, channels, models, "audio"),
                     },
                 };
             },
         },
     ),
 );
+
+function capabilityModelList(current: string[], persisted: unknown, channels: ModelChannel[], models: string[], capability: ModelCapability) {
+    const suggested = filterModelsByCapability(models, capability);
+    if (!Array.isArray(persisted)) return suggested;
+    return Array.from(new Set([...normalizeModelList(current, channels), ...suggested]));
+}
 
 function normalizeModelList(models: string[], channels: ModelChannel[]) {
     const allModelOptions = channels.flatMap((channel) => channel.models.map((model) => encodeChannelModel(channel.id, model)));
