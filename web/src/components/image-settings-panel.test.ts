@@ -12,13 +12,23 @@ const expectedAspectOptions = [
     ["16:9", "16:9", 1280, 720],
     ["9:16", "9:16", 720, 1280],
     ["21:9", "21:9", 1456, 624],
+    ["1:1-2k", "1:1(2K)", 2048, 2048],
+    ["3:2-2k", "3:2(2K)", 2496, 1664],
+    ["2:3-2k", "2:3(2K)", 1664, 2496],
+    ["4:3-2k", "4:3(2K)", 2304, 1728],
+    ["3:4-2k", "3:4(2K)", 1728, 2304],
+    ["5:4-2k", "5:4(2K)", 2240, 1792],
+    ["4:5-2k", "4:5(2K)", 1792, 2240],
+    ["16:9-2k", "16:9(2K)", 2560, 1440],
+    ["9:16-2k", "9:16(2K)", 1440, 2560],
+    ["21:9-2k", "21:9(2K)", 3024, 1296],
     ["auto", "auto", 0, 0],
 ] as const;
 
 assert.deepEqual(
     __test__.aspectOptions.map((item) => [item.value, item.label, item.width, item.height]),
     expectedAspectOptions,
-    "image settings should expose the new 1K gpt-image ratio presets and remove stale 2K/4K explicit ratio buttons",
+    "image settings should expose the new 1K and 2K gpt-image ratio presets without 4K explicit ratio buttons",
 );
 
 for (const [value, label] of expectedAspectOptions) {

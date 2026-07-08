@@ -14,7 +14,7 @@ const qualityOptions = [
 ];
 const DIMENSION_STEP = 16;
 
-const aspectOptions = [
+const aspectOptions: Array<{ value: string; label: string; width: number; height: number; icon: string; size?: string }> = [
     { value: "1:1", label: "1:1", width: 1024, height: 1024, icon: "square" },
     { value: "3:2", label: "3:2", width: 1536, height: 1024, icon: "landscape" },
     { value: "2:3", label: "2:3", width: 1024, height: 1536, icon: "portrait" },
@@ -25,6 +25,16 @@ const aspectOptions = [
     { value: "16:9", label: "16:9", width: 1280, height: 720, icon: "landscape" },
     { value: "9:16", label: "9:16", width: 720, height: 1280, icon: "portrait" },
     { value: "21:9", label: "21:9", width: 1456, height: 624, icon: "landscape" },
+    { value: "1:1-2k", label: "1:1(2K)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
+    { value: "3:2-2k", label: "3:2(2K)", size: "2496x1664", width: 2496, height: 1664, icon: "landscape" },
+    { value: "2:3-2k", label: "2:3(2K)", size: "1664x2496", width: 1664, height: 2496, icon: "portrait" },
+    { value: "4:3-2k", label: "4:3(2K)", size: "2304x1728", width: 2304, height: 1728, icon: "landscape" },
+    { value: "3:4-2k", label: "3:4(2K)", size: "1728x2304", width: 1728, height: 2304, icon: "portrait" },
+    { value: "5:4-2k", label: "5:4(2K)", size: "2240x1792", width: 2240, height: 1792, icon: "landscape" },
+    { value: "4:5-2k", label: "4:5(2K)", size: "1792x2240", width: 1792, height: 2240, icon: "portrait" },
+    { value: "16:9-2k", label: "16:9(2K)", size: "2560x1440", width: 2560, height: 1440, icon: "landscape" },
+    { value: "9:16-2k", label: "9:16(2K)", size: "1440x2560", width: 1440, height: 2560, icon: "portrait" },
+    { value: "21:9-2k", label: "21:9(2K)", size: "3024x1296", width: 3024, height: 1296, icon: "landscape" },
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 
