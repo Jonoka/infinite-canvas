@@ -30,6 +30,57 @@ const generationBodyWithNewApiGptImage = __test__.buildGenerationRequestBody({ a
 assert.equal(generationBodyWithNewApiGptImage.async, true, "newapi gpt-image requests should use async automatically to avoid long sync response disconnects");
 assert.equal(generationBodyWithNewApiGptImage.response_format, "url", "newapi gpt-image requests should avoid huge base64 JSON responses");
 
+const expectedGptImageSizes = {
+    low: {
+        "1:1": "1024x1024",
+        "3:2": "1536x1024",
+        "2:3": "1024x1536",
+        "4:3": "1152x864",
+        "3:4": "864x1152",
+        "5:4": "1120x896",
+        "4:5": "896x1120",
+        "16:9": "1280x720",
+        "9:16": "720x1280",
+        "21:9": "1456x624",
+    },
+    medium: {
+        "1:1": "2048x2048",
+        "3:2": "2496x1664",
+        "2:3": "1664x2496",
+        "4:3": "2304x1728",
+        "3:4": "1728x2304",
+        "5:4": "2240x1792",
+        "4:5": "1792x2240",
+        "16:9": "2560x1440",
+        "9:16": "1440x2560",
+        "21:9": "3024x1296",
+    },
+    high: {
+        "1:1": "2480x2480",
+        "3:2": "3056x2032",
+        "2:3": "2032x3056",
+        "4:3": "2880x2160",
+        "3:4": "2160x2880",
+        "5:4": "2784x2224",
+        "4:5": "2224x2784",
+        "16:9": "3328x1872",
+        "9:16": "1872x3328",
+        "21:9": "3808x1632",
+    },
+};
+
+for (const [quality, sizes] of Object.entries(expectedGptImageSizes)) {
+    for (const [ratio, size] of Object.entries(sizes)) {
+        const body = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality, size: ratio, count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
+        assert.equal(body.size, size, `gpt-image ${quality} ${ratio} should map to ${size}`);
+        const form = __test__.buildEditFormData({ apiMode: "newapi", quality, size: ratio, count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
+        assert.equal(form.get("size"), size, `gpt-image edit ${quality} ${ratio} should map to ${size}`);
+    }
+}
+
+const nonGptImageBody = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality: "low", size: "4:3", count: "1", imageAsync: "false", model: "other-image-model", systemPrompt: "" } as never, "prompt");
+assert.equal(nonGptImageBody.size, "1168x880", "non gpt-image models should keep the existing ratio-to-pixel behavior");
+
 const editFormWithoutAsync = __test__.buildEditFormData({ quality: "auto", size: "1:1", count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
 assert.equal(editFormWithoutAsync.has("async"), false, "edit async should be omitted when switch is off");
 

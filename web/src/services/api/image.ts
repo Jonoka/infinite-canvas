@@ -116,6 +116,53 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+const GPT_IMAGE_RATIO_SIZE_MAP: Record<string, Record<string, string>> = {
+    low: {
+        "1:1": "1024x1024",
+        "3:2": "1536x1024",
+        "2:3": "1024x1536",
+        "4:3": "1152x864",
+        "3:4": "864x1152",
+        "5:4": "1120x896",
+        "4:5": "896x1120",
+        "16:9": "1280x720",
+        "9:16": "720x1280",
+        "21:9": "1456x624",
+    },
+    medium: {
+        "1:1": "2048x2048",
+        "3:2": "2496x1664",
+        "2:3": "1664x2496",
+        "4:3": "2304x1728",
+        "3:4": "1728x2304",
+        "5:4": "2240x1792",
+        "4:5": "1792x2240",
+        "16:9": "2560x1440",
+        "9:16": "1440x2560",
+        "21:9": "3024x1296",
+    },
+    high: {
+        "1:1": "2480x2480",
+        "3:2": "3056x2032",
+        "2:3": "2032x3056",
+        "4:3": "2880x2160",
+        "3:4": "2160x2880",
+        "5:4": "2784x2224",
+        "4:5": "2224x2784",
+        "16:9": "3328x1872",
+        "9:16": "1872x3328",
+        "21:9": "3808x1632",
+    },
+};
+
+function isGptImageModel(model: string | undefined) {
+    return /^gpt-image-/i.test((model || "").trim());
+}
+
+function resolveGptImagePresetSize(quality: string | undefined, ratio: string) {
+    if (!quality) return undefined;
+    return GPT_IMAGE_RATIO_SIZE_MAP[quality]?.[ratio.trim()];
+}
 
 function normalizeQuality(quality: string) {
     const value = quality.trim().toLowerCase();
@@ -173,7 +220,7 @@ function validateImageSize(width: number, height: number) {
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");
 }
 
-function resolveRequestSize(quality: string | undefined, size: string) {
+function resolveRequestSize(quality: string | undefined, size: string, model?: string) {
     const value = size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
@@ -181,7 +228,13 @@ function resolveRequestSize(quality: string | undefined, size: string) {
         validateImageSize(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveSize(quality, value);
+    if (value.includes(":")) {
+        if (isGptImageModel(model)) {
+            const presetSize = resolveGptImagePresetSize(quality, value);
+            if (presetSize) return presetSize;
+        }
+        return resolveSize(quality, value);
+    }
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
@@ -672,7 +725,7 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 
 function buildGenerationRequestBody(config: AiConfig, prompt: string) {
     const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const requestSize = resolveRequestSize(quality, config.size, config.model);
     return {
         model: config.model,
         prompt: withSystemPrompt(config, prompt),
@@ -687,7 +740,7 @@ function buildGenerationRequestBody(config: AiConfig, prompt: string) {
 
 function buildEditFormData(config: AiConfig, prompt: string) {
     const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const requestSize = resolveRequestSize(quality, config.size, config.model);
     const formData = new FormData();
     formData.set("model", config.model);
     formData.set("prompt", withSystemPrompt(config, prompt));
