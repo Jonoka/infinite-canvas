@@ -103,6 +103,7 @@ const QUALITY_BASE: Record<string, number> = {
     high: 2880,
     standard: 1024,
     hd: 2048,
+    auto: 1024,
 };
 const QUALITY_ALIASES: Record<string, string> = {
     "1k": "low",
@@ -117,6 +118,18 @@ const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 const GPT_IMAGE_RATIO_SIZE_MAP: Record<string, Record<string, string>> = {
+    auto: {
+        "1:1": "1024x1024",
+        "3:2": "1536x1024",
+        "2:3": "1024x1536",
+        "4:3": "1152x864",
+        "3:4": "864x1152",
+        "5:4": "1120x896",
+        "4:5": "896x1120",
+        "16:9": "1280x720",
+        "9:16": "720x1280",
+        "21:9": "1456x624",
+    },
     low: {
         "1:1": "1024x1024",
         "3:2": "1536x1024",
@@ -160,8 +173,7 @@ function isGptImageModel(model: string | undefined) {
 }
 
 function resolveGptImagePresetSize(quality: string | undefined, ratio: string) {
-    if (!quality) return undefined;
-    return GPT_IMAGE_RATIO_SIZE_MAP[quality]?.[ratio.trim()];
+    return GPT_IMAGE_RATIO_SIZE_MAP[quality || "auto"]?.[ratio.trim()];
 }
 
 function normalizeQuality(quality: string) {

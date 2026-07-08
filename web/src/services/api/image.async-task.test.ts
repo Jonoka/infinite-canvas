@@ -31,6 +31,18 @@ assert.equal(generationBodyWithNewApiGptImage.async, true, "newapi gpt-image req
 assert.equal(generationBodyWithNewApiGptImage.response_format, "url", "newapi gpt-image requests should avoid huge base64 JSON responses");
 
 const expectedGptImageSizes = {
+    auto: {
+        "1:1": "1024x1024",
+        "3:2": "1536x1024",
+        "2:3": "1024x1536",
+        "4:3": "1152x864",
+        "3:4": "864x1152",
+        "5:4": "1120x896",
+        "4:5": "896x1120",
+        "16:9": "1280x720",
+        "9:16": "720x1280",
+        "21:9": "1456x624",
+    },
     low: {
         "1:1": "1024x1024",
         "3:2": "1536x1024",
