@@ -172,6 +172,34 @@ function isGptImageModel(model: string | undefined) {
     return /^gpt-image-/i.test((model || "").trim());
 }
 
+function isGptImageLiteModel(model: string | undefined) {
+    return (model || "").trim().toLowerCase() === "gpt-image-2-lite";
+}
+
+function imageRatio(size: string) {
+    const value = size.trim();
+    if (value.includes(":")) return value;
+    const dimensions = parseImageDimensions(value);
+    if (!dimensions) return undefined;
+    const divisor = greatestCommonDivisor(dimensions.width, dimensions.height);
+    return `${dimensions.width / divisor}:${dimensions.height / divisor}`;
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+    return right ? greatestCommonDivisor(right, left % right) : left;
+}
+
+const LITE_RATIO_HINT = /(?:\n\n)?输出必须采用 \d+(?:\.\d+)?:\d+(?:\.\d+)? (?:横向|竖向|方形)构图，目标宽高比严格为 \d+(?:\.\d+)?:\d+(?:\.\d+)?；实际像素可由模型决定。\s*$/;
+
+function withLiteRatioHint(model: string | undefined, prompt: string, size: string) {
+    if (!isGptImageLiteModel(model)) return prompt;
+    const ratio = imageRatio(size);
+    if (!ratio) return prompt;
+    const dimensions = ratio.split(":").map(Number);
+    const orientation = dimensions[0] === dimensions[1] ? "方形" : dimensions[0] > dimensions[1] ? "横向" : "竖向";
+    return `${prompt.replace(LITE_RATIO_HINT, "").trimEnd()}\n\n输出必须采用 ${ratio} ${orientation}构图，目标宽高比严格为 ${ratio}；实际像素可由模型决定。`;
+}
+
 function resolveGptImagePresetSize(quality: string | undefined, ratio: string) {
     return GPT_IMAGE_RATIO_SIZE_MAP[quality || "auto"]?.[ratio.trim()];
 }
@@ -241,6 +269,7 @@ function resolveRequestSize(quality: string | undefined, size: string, model?: s
         return `${dimensions.width}x${dimensions.height}`;
     }
     if (value.includes(":")) {
+        if ((model || "").trim().toLowerCase() === "gpt-image-2-pro" && quality === "high" && value === "9:16") return "2160x3840";
         if (isGptImageModel(model)) {
             const presetSize = resolveGptImagePresetSize(quality, value);
             if (presetSize) return presetSize;
@@ -736,11 +765,12 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 }
 
 function buildGenerationRequestBody(config: AiConfig, prompt: string) {
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size, config.model);
+    const quality = isGptImageLiteModel(config.model) ? "low" : normalizeQuality(config.quality);
+    const size = isGptImageLiteModel(config.model) ? imageRatio(config.size) || "1:1" : config.size;
+    const requestSize = resolveRequestSize(quality, size, config.model);
     return {
         model: config.model,
-        prompt: withSystemPrompt(config, prompt),
+        prompt: withSystemPrompt(config, withLiteRatioHint(config.model, prompt, size)),
         n: Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1))),
         ...(quality ? { quality } : {}),
         ...(requestSize ? { size: requestSize } : {}),
@@ -751,11 +781,12 @@ function buildGenerationRequestBody(config: AiConfig, prompt: string) {
 }
 
 function buildEditFormData(config: AiConfig, prompt: string) {
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size, config.model);
+    const quality = isGptImageLiteModel(config.model) ? "low" : normalizeQuality(config.quality);
+    const size = isGptImageLiteModel(config.model) ? imageRatio(config.size) || "1:1" : config.size;
+    const requestSize = resolveRequestSize(quality, size, config.model);
     const formData = new FormData();
     formData.set("model", config.model);
-    formData.set("prompt", withSystemPrompt(config, prompt));
+    formData.set("prompt", withSystemPrompt(config, withLiteRatioHint(config.model, prompt, size)));
     formData.set("n", String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)))));
     formData.set("response_format", imageResponseFormat(config));
     formData.set("output_format", IMAGE_OUTPUT_FORMAT);

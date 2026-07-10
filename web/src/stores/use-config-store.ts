@@ -85,11 +85,11 @@ export const defaultConfig: AiConfig = {
             apiFormat: "openai",
             apiMode: "direct",
             group: "",
-            models: ["gpt-image-2", "grok-imagine-video", "gpt-5.5", "gpt-4o-mini-tts"],
+            models: ["gpt-image-2-lite", "gpt-image-2-pro", "gpt-image-2", "grok-imagine-video", "gpt-5.5", "gpt-4o-mini-tts"],
         },
     ],
-    model: "default::gpt-image-2",
-    imageModel: "default::gpt-image-2",
+    model: "default::gpt-image-2-lite",
+    imageModel: "default::gpt-image-2-lite",
     videoModel: "default::grok-imagine-video",
     textModel: "default::gpt-5.5",
     audioModel: "default::gpt-4o-mini-tts",
@@ -103,8 +103,8 @@ export const defaultConfig: AiConfig = {
     videoWatermark: "false",
     videoReferenceMode: "image",
     systemPrompt: "",
-    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
-    imageModels: ["default::gpt-image-2"],
+    models: ["default::gpt-image-2-lite", "default::gpt-image-2-pro", "default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    imageModels: ["default::gpt-image-2-lite", "default::gpt-image-2-pro", "default::gpt-image-2"],
     videoModels: ["default::grok-imagine-video"],
     textModels: ["default::gpt-5.5"],
     audioModels: ["default::gpt-4o-mini-tts"],
@@ -308,9 +308,16 @@ export function modelOptionName(value: string) {
 
 export function modelOptionLabel(config: AiConfig, value: string) {
     const decoded = decodeChannelModel(value);
-    if (!decoded) return value;
+    const label = imageModelDisplayName(decoded?.model || value);
+    if (!decoded) return label;
     const channel = config.channels.find((item) => item.id === decoded.channelId);
-    return channel ? `${decoded.model}（${channel.name}）` : decoded.model;
+    return channel ? `${label}（${channel.name}）` : label;
+}
+
+function imageModelDisplayName(model: string) {
+    if (model === "gpt-image-2-lite") return "GPT Image 2 · 轻量版";
+    if (model === "gpt-image-2-pro") return "GPT Image 2 · 专业版";
+    return model;
 }
 
 export function modelOptionsFromChannels(channels: ModelChannel[]) {

@@ -93,6 +93,24 @@ for (const [quality, sizes] of Object.entries(expectedGptImageSizes)) {
 const nonGptImageBody = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality: "low", size: "4:3", count: "1", imageAsync: "false", model: "other-image-model", systemPrompt: "" } as never, "prompt");
 assert.equal(nonGptImageBody.size, "1168x880", "non gpt-image models should keep the existing ratio-to-pixel behavior");
 
+const liteBody = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality: "high", size: "9:16", count: "1", imageAsync: "false", model: "gpt-image-2-lite", systemPrompt: "" } as never, "一只猫");
+assert.equal(liteBody.quality, "low", "lite should always request 1K/low quality");
+assert.equal(liteBody.size, "720x1280", "lite should only use the 1K size map");
+assert.equal(liteBody.prompt, "一只猫\n\n输出必须采用 9:16 竖向构图，目标宽高比严格为 9:16；实际像素可由模型决定。", "lite should add a ratio composition hint without promising exact pixels");
+
+const repeatedLiteBody = __test__.buildGenerationRequestBody({ quality: "medium", size: "16:9", count: "1", imageAsync: "false", model: "gpt-image-2-lite", systemPrompt: "" } as never, "一只猫\n\n输出必须采用 9:16 竖向构图，目标宽高比严格为 9:16；实际像素可由模型决定。");
+assert.equal(repeatedLiteBody.prompt, "一只猫\n\n输出必须采用 16:9 横向构图，目标宽高比严格为 16:9；实际像素可由模型决定。", "lite ratio hints should be replaced instead of accumulated");
+
+const liteEdit = __test__.buildEditFormData({ quality: "auto", size: "4:3", count: "1", imageAsync: "false", model: "gpt-image-2-lite", systemPrompt: "系统" } as never, "调整图片");
+assert.equal(liteEdit.get("quality"), "low");
+assert.equal(liteEdit.get("size"), "1152x864");
+assert.equal(liteEdit.get("prompt"), "系统\n\n调整图片\n\n输出必须采用 4:3 横向构图，目标宽高比严格为 4:3；实际像素可由模型决定。", "edit requests should share lite prompt behavior");
+
+const proPortrait4k = __test__.buildGenerationRequestBody({ quality: "high", size: "9:16", count: "1", imageAsync: "false", model: "gpt-image-2-pro", systemPrompt: "" } as never, "海报");
+assert.equal(proPortrait4k.quality, "high");
+assert.equal(proPortrait4k.size, "2160x3840", "pro 9:16 4K should use the verified explicit size");
+assert.equal(proPortrait4k.prompt, "海报", "pro should not modify the prompt");
+
 const editFormWithoutAsync = __test__.buildEditFormData({ quality: "auto", size: "1:1", count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
 assert.equal(editFormWithoutAsync.has("async"), false, "edit async should be omitted when switch is off");
 

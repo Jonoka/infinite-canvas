@@ -39,3 +39,13 @@ assert.deepEqual(__test__.readSizeDimensions("16:9", __test__.aspectOptions.find
 assert.deepEqual(__test__.readSizeDimensions("4:3", __test__.aspectOptions.find((item) => item.value === "4:3")!), { width: 1152, height: 864 });
 assert.equal(__test__.alignDimension(721, true), 736);
 assert.equal(__test__.alignDimension(721, false), 721);
+
+assert.deepEqual(__test__.settingsForModel("gpt-image-2-lite").qualityOptions, [{ value: "low", label: "1K" }]);
+assert.equal(__test__.settingsForModel("gpt-image-2-lite").aspectOptions.length, 10, "lite should only expose 1K ratios");
+assert.deepEqual(
+    __test__.settingsForModel("default::gpt-image-2-pro").qualityOptions.map((item) => item.label),
+    ["1K", "2K", "4K"],
+    "pro should expose all supported resolutions",
+);
+assert.equal(__test__.settingsForModel("gpt-image-2-pro").aspectOptions.length, 10, "pro resolution should be selected separately from ratio");
+assert.equal(__test__.effectiveImageQuality("gpt-image-2-lite", "high"), "low");
