@@ -170,7 +170,11 @@ export function filterModelsByCapability(models: string[], capability?: ModelCap
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
     if (!capability) return config.models;
-    return config[modelListKey(capability)];
+    return config[modelListKey(capability)].filter((model) => !isHiddenCompatibilityImageModel(model));
+}
+
+export function isHiddenCompatibilityImageModel(model: string) {
+    return modelOptionName(model).toLowerCase() === "gpt-image-2";
 }
 
 function modelListKey(capability: ModelCapability) {
