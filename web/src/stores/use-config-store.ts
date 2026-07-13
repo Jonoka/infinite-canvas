@@ -179,8 +179,6 @@ export function isHiddenCompatibilityImageModel(model: string) {
 
 const GPT_IMAGE_LITE = "gpt-image-2-lite";
 const GPT_IMAGE_PRO = "gpt-image-2-pro";
-const GPT_IMAGE_LITE_GROUP = "GPT生图特价";
-const GPT_IMAGE_PRO_GROUP = "GPT生图专用";
 
 export function migrateLegacyGptImageConfig(config: AiConfig): AiConfig {
     const defaultChannelIndex = config.channels.findIndex((channel) => channel.id === "default");
@@ -365,6 +363,25 @@ export function modelOptionsFromChannels(channels: ModelChannel[]) {
     return uniqueModelOptions(channels.flatMap((channel) => channel.models.map((model) => encodeChannelModel(channel.id, model))));
 }
 
+export function reconcileChannelModels(config: AiConfig, channelId: string, rawModels: string[]): AiConfig {
+    const channels = config.channels.map((channel) => channel.id === channelId ? { ...channel, models: uniqueRawModels(rawModels) } : channel);
+    const models = modelOptionsFromChannels(channels);
+    const nextConfig: AiConfig = {
+        ...config,
+        channels,
+        models,
+        imageModels: filterModelsByCapability(models, "image").filter((model) => !isHiddenCompatibilityImageModel(model)),
+        videoModels: filterModelsByCapability(models, "video"),
+        textModels: filterModelsByCapability(models, "text"),
+        audioModels: filterModelsByCapability(models, "audio"),
+    };
+    for (const [modelKey, modelsKey] of [["imageModel", "imageModels"], ["videoModel", "videoModels"], ["textModel", "textModels"], ["audioModel", "audioModels"]] as const) {
+        if (!nextConfig[modelsKey].includes(nextConfig[modelKey])) nextConfig[modelKey] = nextConfig[modelsKey][0] || "";
+    }
+    if (!models.includes(nextConfig.model)) nextConfig.model = nextConfig.imageModel || nextConfig.videoModel || nextConfig.textModel || nextConfig.audioModel || "";
+    return nextConfig;
+}
+
 export function normalizeModelOptionValue(value: string | undefined, channels: ModelChannel[]) {
     const model = (value || "").trim();
     if (!model) return "";
@@ -386,22 +403,14 @@ export function resolveModelChannel(config: AiConfig, value: string) {
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
-    const model = modelOptionName(value || config.model);
-    const group = isNewApiMode(channel)
-        ? model === GPT_IMAGE_PRO
-            ? GPT_IMAGE_PRO_GROUP
-            : model === GPT_IMAGE_LITE || model === "gpt-image-2"
-              ? GPT_IMAGE_LITE_GROUP
-              : channel.group
-        : channel.group;
     return {
         ...config,
-        model,
+        model: modelOptionName(value || config.model),
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
         apiMode: channel.apiMode,
-        group,
+        group: channel.group,
     };
 }
 

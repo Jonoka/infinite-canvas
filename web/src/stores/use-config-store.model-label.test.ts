@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { defaultConfig, isHiddenCompatibilityImageModel, migrateLegacyGptImageConfig, modelOptionLabel, resolveModelRequestConfig, selectableModelsByCapability } from "./use-config-store";
+import { defaultConfig, isHiddenCompatibilityImageModel, migrateLegacyGptImageConfig, modelOptionLabel, reconcileChannelModels, resolveModelRequestConfig, selectableModelsByCapability } from "./use-config-store";
 
 assert.equal(modelOptionLabel(defaultConfig, "gpt-image-2-lite"), "GPT Image 2 · 轻量版");
 assert.equal(modelOptionLabel(defaultConfig, "gpt-image-2-pro"), "GPT Image 2 · 专业版");
@@ -58,8 +58,19 @@ const sharedLegacyImageChannel = {
         },
     ],
 };
-assert.equal(resolveModelRequestConfig(sharedLegacyImageChannel, "default::gpt-image-2-lite").group, "GPT生图特价", "lite should keep the legacy channel group");
-assert.equal(resolveModelRequestConfig(sharedLegacyImageChannel, "default::gpt-image-2-pro").group, "GPT生图专用", "pro must route through its dedicated New API group even when an older shared channel persisted the discount group");
+assert.equal(resolveModelRequestConfig(sharedLegacyImageChannel, "default::gpt-image-2-lite").group, "GPT生图特价", "lite should keep the selected channel group");
+assert.equal(resolveModelRequestConfig(sharedLegacyImageChannel, "default::gpt-image-2-pro").group, "GPT生图特价", "requests must preserve the selected group instead of overriding it by model name");
+const fixedGroupModels = reconcileChannelModels(sharedLegacyImageChannel, "default", ["gpt-image-2-lite"]);
+assert.deepEqual(fixedGroupModels.channels, [{ ...sharedLegacyImageChannel.channels[0], models: ["gpt-image-2-lite"] }]);
+assert.deepEqual(fixedGroupModels.models, ["default::gpt-image-2-lite"]);
+assert.deepEqual(fixedGroupModels.imageModels, ["default::gpt-image-2-lite"]);
+assert.equal(fixedGroupModels.imageModel, "default::gpt-image-2-lite");
+assert.equal(fixedGroupModels.model, "default::gpt-image-2-lite", "refreshing a fixed group must remove unavailable Pro and move an invalid current selection to Lite");
+assert.deepEqual(
+    reconcileChannelModels(sharedLegacyImageChannel, "default", ["gpt-image-2-lite", "gpt-image-2-pro"]).imageModels,
+    ["default::gpt-image-2-lite", "default::gpt-image-2-pro"],
+    "auto model discovery should expose both Lite and Pro when both are routable",
+);
 
 const configuredLiteAndPro = {
     ...defaultConfig,
