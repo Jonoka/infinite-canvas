@@ -38,7 +38,7 @@ for (const [value, label] of expectedAspectOptions) {
 assert.deepEqual(__test__.readSizeDimensions("16:9", __test__.aspectOptions.find((item) => item.value === "16:9")!), { width: 1280, height: 720 });
 assert.deepEqual(__test__.readSizeDimensions("4:3", __test__.aspectOptions.find((item) => item.value === "4:3")!), { width: 1152, height: 864 });
 assert.deepEqual(__test__.displaySizeDimensions("gpt-image-2-pro", "medium", "16:9", __test__.aspectOptions.find((item) => item.value === "16:9")!), { width: 2560, height: 1440 }, "pro 2K should update visible dimensions for the selected ratio");
-assert.deepEqual(__test__.displaySizeDimensions("gpt-image-2-pro", "high", "16:9", __test__.aspectOptions.find((item) => item.value === "16:9")!), { width: 3328, height: 1872 }, "pro 4K should update visible dimensions for the selected ratio");
+assert.deepEqual(__test__.displaySizeDimensions("gpt-image-2-pro", "high", "16:9", __test__.aspectOptions.find((item) => item.value === "16:9")!), { width: 3840, height: 2160 }, "pro 4K should use the full 4K preset for the selected ratio");
 assert.deepEqual(__test__.displaySizeDimensions("gpt-image-2-pro", "high", "9:16", __test__.aspectOptions.find((item) => item.value === "9:16")!), { width: 2160, height: 3840 }, "pro 4K portrait should show the verified exact dimensions");
 assert.deepEqual(__test__.displaySizeDimensions("gpt-image-2-pro", "high", "1280x720", __test__.aspectOptions[0]), { width: 1280, height: 720 }, "explicit custom dimensions should not be overwritten by quality presets");
 assert.equal(__test__.alignDimension(721, true), 736);

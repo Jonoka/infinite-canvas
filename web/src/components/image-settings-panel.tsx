@@ -29,8 +29,8 @@ const gptImagePresetDimensions: Record<string, Record<string, { width: number; h
         "5:4": { width: 2240, height: 1792 }, "4:5": { width: 1792, height: 2240 }, "16:9": { width: 2560, height: 1440 }, "9:16": { width: 1440, height: 2560 }, "21:9": { width: 3024, height: 1296 },
     },
     high: {
-        "1:1": { width: 2480, height: 2480 }, "3:2": { width: 3056, height: 2032 }, "2:3": { width: 2032, height: 3056 }, "4:3": { width: 2880, height: 2160 }, "3:4": { width: 2160, height: 2880 },
-        "5:4": { width: 2784, height: 2224 }, "4:5": { width: 2224, height: 2784 }, "16:9": { width: 3328, height: 1872 }, "9:16": { width: 2160, height: 3840 }, "21:9": { width: 3808, height: 1632 },
+        "1:1": { width: 2880, height: 2880 }, "3:2": { width: 3504, height: 2336 }, "2:3": { width: 2336, height: 3504 }, "4:3": { width: 3264, height: 2448 }, "3:4": { width: 2448, height: 3264 },
+        "5:4": { width: 3200, height: 2560 }, "4:5": { width: 2560, height: 3200 }, "16:9": { width: 3840, height: 2160 }, "9:16": { width: 2160, height: 3840 }, "21:9": { width: 3840, height: 1648 },
     },
 };
 
