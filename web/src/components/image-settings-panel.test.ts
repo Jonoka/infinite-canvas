@@ -48,4 +48,6 @@ assert.deepEqual(
     "pro should expose all supported resolutions",
 );
 assert.equal(__test__.settingsForModel("gpt-image-2-pro").aspectOptions.length, 10, "pro resolution should be selected separately from ratio");
+assert.equal(__test__.settingsForModel("gpt-image-2-lite").hideDimensions, true, "lite should hide exact pixel inputs");
+assert.equal(__test__.settingsForModel("gpt-image-2-pro").hideDimensions, false, "pro should expose exact pixel inputs");
 assert.equal(__test__.effectiveImageQuality("gpt-image-2-lite", "high"), "low");

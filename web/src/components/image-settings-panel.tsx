@@ -279,7 +279,7 @@ function alignDimension(value: number, enabled: boolean) {
 function settingsForModel(model: string) {
     const name = modelOptionName(model).toLowerCase();
     if (name === "gpt-image-2-lite") return { qualityOptions: gptImageQualityOptions.slice(0, 1), aspectOptions: aspectOptions.slice(0, 10), hideDimensions: true, ratioNotice: true };
-    if (name === "gpt-image-2-pro") return { qualityOptions: gptImageQualityOptions, aspectOptions: aspectOptions.slice(0, 10), hideDimensions: true, ratioNotice: false };
+    if (name === "gpt-image-2-pro") return { qualityOptions: gptImageQualityOptions, aspectOptions: aspectOptions.slice(0, 10), hideDimensions: false, ratioNotice: false };
     return { qualityOptions, aspectOptions, hideDimensions: false, ratioNotice: false };
 }
 
