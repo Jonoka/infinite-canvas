@@ -19,6 +19,21 @@ const gptImageQualityOptions = [
 ];
 const DIMENSION_STEP = 16;
 
+const gptImagePresetDimensions: Record<string, Record<string, { width: number; height: number }>> = {
+    low: {
+        "1:1": { width: 1024, height: 1024 }, "3:2": { width: 1536, height: 1024 }, "2:3": { width: 1024, height: 1536 }, "4:3": { width: 1152, height: 864 }, "3:4": { width: 864, height: 1152 },
+        "5:4": { width: 1120, height: 896 }, "4:5": { width: 896, height: 1120 }, "16:9": { width: 1280, height: 720 }, "9:16": { width: 720, height: 1280 }, "21:9": { width: 1456, height: 624 },
+    },
+    medium: {
+        "1:1": { width: 2048, height: 2048 }, "3:2": { width: 2496, height: 1664 }, "2:3": { width: 1664, height: 2496 }, "4:3": { width: 2304, height: 1728 }, "3:4": { width: 1728, height: 2304 },
+        "5:4": { width: 2240, height: 1792 }, "4:5": { width: 1792, height: 2240 }, "16:9": { width: 2560, height: 1440 }, "9:16": { width: 1440, height: 2560 }, "21:9": { width: 3024, height: 1296 },
+    },
+    high: {
+        "1:1": { width: 2480, height: 2480 }, "3:2": { width: 3056, height: 2032 }, "2:3": { width: 2032, height: 3056 }, "4:3": { width: 2880, height: 2160 }, "3:4": { width: 2160, height: 2880 },
+        "5:4": { width: 2784, height: 2224 }, "4:5": { width: 2224, height: 2784 }, "16:9": { width: 3328, height: 1872 }, "9:16": { width: 2160, height: 3840 }, "21:9": { width: 3808, height: 1632 },
+    },
+};
+
 const aspectOptions: Array<{ value: string; label: string; width: number; height: number; icon: string; size?: string }> = [
     { value: "1:1", label: "1:1", width: 1024, height: 1024, icon: "square" },
     { value: "3:2", label: "3:2", width: 1536, height: 1024, icon: "landscape" },
@@ -63,7 +78,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
     const selectedAspect = availableAspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
-    const dimensions = readSizeDimensions(activeSize, selectedAspect || availableAspectOptions[0]);
+    const dimensions = displaySizeDimensions(config.model || config.imageModel, quality, activeSize, selectedAspect || availableAspectOptions[0]);
     const selectAspect = (value: string) => {
         const option = availableAspectOptions.find((item) => item.value === value);
         onConfigChange("size", option?.size || option?.value || "auto");
@@ -272,6 +287,15 @@ function readSizeDimensions(size: string, fallback: { width: number; height: num
     };
 }
 
+function displaySizeDimensions(model: string, quality: string, size: string, fallback: { width: number; height: number }) {
+    if (/^\d+x\d+$/i.test(size)) return readSizeDimensions(size, fallback);
+    if (modelOptionName(model).toLowerCase() === "gpt-image-2-pro") {
+        const preset = gptImagePresetDimensions[quality]?.[size];
+        if (preset) return preset;
+    }
+    return readSizeDimensions(size, fallback);
+}
+
 function alignDimension(value: number, enabled: boolean) {
     return enabled ? Math.ceil(value / DIMENSION_STEP) * DIMENSION_STEP : value;
 }
@@ -287,4 +311,4 @@ function effectiveImageQuality(model: string, quality: string) {
     return modelOptionName(model).toLowerCase() === "gpt-image-2-lite" ? "low" : quality;
 }
 
-export const __test__ = { aspectOptions, readSizeDimensions, alignDimension, settingsForModel, effectiveImageQuality };
+export const __test__ = { aspectOptions, readSizeDimensions, displaySizeDimensions, alignDimension, settingsForModel, effectiveImageQuality };
