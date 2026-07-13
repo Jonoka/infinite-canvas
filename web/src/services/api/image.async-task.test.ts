@@ -28,7 +28,10 @@ assert.equal(generationBodyWithAsync.async, true, "async should be true when swi
 
 const generationBodyWithNewApiGptImage = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality: "high", size: "3840x2160", count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
 assert.equal(generationBodyWithNewApiGptImage.async, true, "newapi gpt-image requests should use async automatically to avoid long sync response disconnects");
-assert.equal(generationBodyWithNewApiGptImage.response_format, "url", "newapi gpt-image requests should avoid huge base64 JSON responses");
+assert.equal(generationBodyWithNewApiGptImage.response_format, "url", "legacy/lite New API image requests can keep lightweight URL responses");
+
+const generationBodyWithNewApiGptImagePro = __test__.buildGenerationRequestBody({ apiMode: "newapi", quality: "high", size: "3840x2160", count: "1", imageAsync: "false", model: "gpt-image-2-pro", systemPrompt: "" } as never, "prompt");
+assert.equal(generationBodyWithNewApiGptImagePro.response_format, "b64_json", "Pro must request base64 because its upstream can return loopback-only HTTP URLs");
 
 const expectedGptImageSizes = {
     auto: {

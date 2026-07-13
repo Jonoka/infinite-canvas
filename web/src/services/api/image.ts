@@ -802,6 +802,7 @@ function shouldUseAsyncImageRequest(config: Pick<AiConfig, "apiMode" | "model" |
 }
 
 function imageResponseFormat(config: Pick<AiConfig, "apiMode" | "model">) {
+    if (isNewApiMode(config) && config.model.trim().toLowerCase() === "gpt-image-2-pro") return "b64_json";
     return isNewApiMode(config) && /^gpt-image-/i.test(config.model.trim()) ? "url" : "b64_json";
 }
 
