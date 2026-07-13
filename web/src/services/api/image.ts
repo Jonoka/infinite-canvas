@@ -5,6 +5,7 @@ import { aiApiUrl, aiHeaders, aiRequestOptions } from "@/services/api/ai-client"
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
+import { ImageRequestError } from "@/lib/lite-pro-fallback";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
 
@@ -67,9 +68,10 @@ type ResponseApiPayload = {
 };
 type ResponseStreamState = { buffer: string; text: string; payload?: ResponseApiPayload; error?: string };
 
+type ImageApiError = { message?: string; type?: string; code?: string | number };
 type ImageApiResponse = {
     data?: Array<Record<string, unknown>> | Record<string, unknown> | null;
-    error?: { message?: string };
+    error?: ImageApiError | string;
     code?: number;
     msg?: string;
     id?: string;
@@ -95,7 +97,10 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = {
+    signal?: AbortSignal;
+    requestOverride?: { model?: string; group?: string; quality?: AiConfig["quality"]; size?: string; count?: string };
+};
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -343,7 +348,10 @@ async function resolveImageResponse(config: AiConfig, payload: ImageApiResponse,
         const nextTask = imageTaskPayload(response.data) || response.data;
         if (isImageTaskSuccess(nextTask)) return parseImagePayload(nextTask);
         const status = (nextTask.status || "").toLowerCase();
-        if (["failed", "failure", "cancelled", "canceled", "expired"].includes(status)) throw new Error(nextTask.error?.message || nextTask.msg || "图片生成失败");
+        if (["failed", "failure", "cancelled", "canceled", "expired"].includes(status)) {
+            const details = imageApiErrorDetails(nextTask.error);
+            throw new ImageRequestError(details.message || nextTask.msg || "图片生成失败", details.code);
+        }
         if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
     }
     throw new Error("图片生成超时，请稍后重试");
@@ -372,14 +380,24 @@ function delay(ms: number, signal?: AbortSignal) {
     });
 }
 
-function readAxiosError(error: unknown, fallback: string) {
-    if (axios.isCancel(error)) return "请求已取消";
-    if (axios.isAxiosError<{ error?: { message?: string }; msg?: string; code?: number }>(error)) {
+function imageApiErrorDetails(error: ImageApiResponse["error"]) {
+    if (typeof error === "string") return { message: error };
+    return { message: error?.message, code: typeof error?.code === "string" ? error.code : undefined };
+}
+
+function toImageRequestError(error: unknown, fallback: string) {
+    if (error instanceof ImageRequestError) return error;
+    if (axios.isCancel(error) || (error instanceof DOMException && error.name === "AbortError")) return new ImageRequestError("请求已取消");
+    if (axios.isAxiosError<{ error?: ImageApiError | string; msg?: string }>(error)) {
         const responseData = error.response?.data;
-        return responseData?.msg || responseData?.error?.message || readStatusError(error.response?.status, fallback);
+        const details = imageApiErrorDetails(responseData?.error);
+        return new ImageRequestError(responseData?.msg || details.message || readStatusError(error.response?.status, fallback), details.code);
     }
-    if (error instanceof DOMException && error.name === "AbortError") return "请求已取消";
-    return error instanceof Error ? error.message : fallback;
+    return new ImageRequestError(error instanceof Error ? error.message : fallback);
+}
+
+function readAxiosError(error: unknown, fallback: string) {
+    return toImageRequestError(error, fallback).message;
 }
 
 function readStatusError(status: number | undefined, fallback: string) {
@@ -807,8 +825,12 @@ function imageResponseFormat(config: Pick<AiConfig, "apiMode" | "model">) {
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
-    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const resolvedConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const requestConfig = { ...resolvedConfig, ...(options?.requestOverride || {}) };
+    const requestCount = options?.requestOverride?.count ?? config.count;
+    const requestQuality = options?.requestOverride?.quality ?? config.quality;
+    const requestSize = options?.requestOverride?.size ?? config.size;
+    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(requestCount)) || 1)));
     if (requestConfig.apiFormat === "gemini") {
         try {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
@@ -819,7 +841,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     try {
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(requestConfig, "/images/generations"),
-            buildGenerationRequestBody({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, imageAsync: config.imageAsync }, prompt),
+            buildGenerationRequestBody({ ...requestConfig, count: requestCount, quality: requestQuality, size: requestSize, imageAsync: config.imageAsync }, prompt),
             aiRequestOptions(requestConfig, {
                 headers: aiHeaders(requestConfig, "application/json"),
                 signal: options?.signal,
@@ -828,13 +850,17 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         const images = await resolveImageResponse(requestConfig, response.data, "/images/generations", options);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        throw toImageRequestError(error, "请求失败");
     }
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
-    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const resolvedConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const requestConfig = { ...resolvedConfig, ...(options?.requestOverride || {}) };
+    const requestCount = options?.requestOverride?.count ?? config.count;
+    const requestQuality = options?.requestOverride?.quality ?? config.quality;
+    const requestSize = options?.requestOverride?.size ?? config.size;
+    const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(requestCount)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     if (requestConfig.apiFormat === "gemini") {
         if (mask) throw new Error("Gemini 调用格式暂不支持蒙版编辑");
@@ -844,7 +870,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const formData = buildEditFormData({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, imageAsync: config.imageAsync }, requestPrompt);
+    const formData = buildEditFormData({ ...requestConfig, count: requestCount, quality: requestQuality, size: requestSize, imageAsync: config.imageAsync }, requestPrompt);
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
     if (mask) formData.set("mask", dataUrlToFile(mask));
@@ -854,7 +880,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
         const images = await resolveImageResponse(requestConfig, response.data, "/images/edits", options);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        throw toImageRequestError(error, "请求失败");
     }
 }
 
@@ -929,4 +955,4 @@ const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "
     systemPrompt: "",
 };
 
-export const __test__ = { parseImagePayload, imageTaskPayload, isImageTaskSuccess, buildGenerationRequestBody, buildEditFormData };
+export const __test__ = { parseImagePayload, imageTaskPayload, isImageTaskSuccess, buildGenerationRequestBody, buildEditFormData, imageApiErrorDetails, toImageRequestError };

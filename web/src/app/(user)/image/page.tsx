@@ -12,6 +12,8 @@ import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatImageCost, useImageCost } from "@/hooks/use-image-cost";
+import { useLiteToProFallbackConfirmation } from "@/hooks/use-lite-pro-fallback-confirmation";
+import { isLitePoolExhaustedError, type LiteToProFallback } from "@/lib/lite-pro-fallback";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -31,6 +33,8 @@ type GeneratedImage = {
     height: number;
     bytes: number;
     mimeType?: string;
+    actualModel?: string;
+    actualGroup?: string;
 };
 
 type GenerationResult = {
@@ -60,7 +64,7 @@ type GenerationLog = {
     thumbnails: string[];
 };
 
-type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "quality" | "size" | "count" | "imageAsync">;
+type GenerationLogConfig = Pick<AiConfig, "model" | "imageModel" | "group" | "quality" | "size" | "count" | "imageAsync">;
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
@@ -70,6 +74,7 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 
 export default function ImagePage() {
     const { message } = App.useApp();
+    const confirmProFallback = useLiteToProFallbackConfirmation();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
@@ -163,7 +168,20 @@ export default function ImagePage() {
 
         const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
 
-        const result = await Promise.allSettled(tasks);
+        let result = await Promise.allSettled(tasks);
+        const eligible = result
+            .map((item, index) => (item.status === "rejected" && isLitePoolExhaustedError(item.reason) ? index : -1))
+            .filter((index) => index >= 0);
+        if (eligible.length) {
+            const fallback = await confirmProFallback(snapshot.config, eligible.length);
+            if (fallback) {
+                const retryResults = await Promise.allSettled(eligible.map((index) => runGenerationSlot(index, snapshot, fallback)));
+                result = [...result];
+                retryResults.forEach((item, retryIndex) => {
+                    result[eligible[retryIndex]] = item;
+                });
+            }
+        }
         const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
         const successCount = successImages.length;
         const failCount = generationCount - successCount;
@@ -179,8 +197,8 @@ export default function ImagePage() {
             saveLog(
                 buildLog({
                     prompt: text,
-                    model,
-                    config: { ...snapshot.config, count: String(generationCount) },
+                    model: successImages.some((image) => image.actualModel === "gpt-image-2-pro") ? "gpt-image-2-pro" : model,
+                    config: { ...snapshot.config, model: successImages.some((image) => image.actualModel === "gpt-image-2-pro") ? "gpt-image-2-pro" : snapshot.config.model, group: successImages.find((image) => image.actualGroup)?.actualGroup || snapshot.config.group, count: String(generationCount) },
                     references: snapshot.references,
                     durationMs: performance.now() - batchStartedAt,
                     successCount,
@@ -285,16 +303,19 @@ export default function ImagePage() {
         return { text, config: { ...effectiveConfig, model, count: "1" }, references: [...references] };
     };
 
-    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }): Promise<GeneratedImage> => {
+    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }, fallback?: LiteToProFallback): Promise<GeneratedImage> => {
         const itemStartedAt = performance.now();
+        const options = fallback
+            ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } }
+            : undefined;
         try {
-            const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references) : await requestGeneration(snapshot.config, snapshot.text);
+            const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references, undefined, options) : await requestGeneration(snapshot.config, snapshot.text, options);
             const image = result[0];
             if (!image) throw new Error("接口没有返回图片");
             const stored = await uploadImage(image.dataUrl);
-            const nextImage = { id: image.id, dataUrl: stored.url, storageKey: stored.storageKey, durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
-            setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
-            return nextImage;
+            const resultImage = { id: image.id, dataUrl: stored.url, storageKey: stored.storageKey, durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType, actualModel: fallback?.model || snapshot.config.model, actualGroup: fallback?.group || snapshot.config.group };
+            setResults((value) => updateResultAt(value, index, { status: "success", image: resultImage }));
+            return resultImage;
         } catch (error) {
             setResults((value) => updateResultAt(value, index, { status: "failed", error: error instanceof Error ? error.message : "生成失败" }));
             throw error;
@@ -306,7 +327,15 @@ export default function ImagePage() {
         if (!snapshot) return;
         setPreviewLog(null);
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
-        void runGenerationSlot(index, snapshot).catch(() => {});
+        void (async () => {
+            try {
+                await runGenerationSlot(index, snapshot);
+            } catch (error) {
+                if (!isLitePoolExhaustedError(error)) return;
+                const fallback = await confirmProFallback(snapshot.config, 1);
+                if (fallback) await runGenerationSlot(index, snapshot, fallback);
+            }
+        })().catch(() => {});
     };
 
     return (

@@ -31,6 +31,7 @@ export type CanvasNodeMetadata = {
     generationMode?: CanvasGenerationMode;
     generationType?: CanvasImageGenerationType;
     model?: string;
+    group?: string;
     size?: string;
     quality?: string;
     count?: number;

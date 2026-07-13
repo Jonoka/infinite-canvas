@@ -7,6 +7,8 @@ import { BookOpen, Bot, Home, ImageIcon, Images, List, Menu, Music2, Plus, Redo2
 import { saveAs } from "file-saver";
 
 import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
+import { useLiteToProFallbackConfirmation } from "@/hooks/use-lite-pro-fallback-confirmation";
+import { isLitePoolExhaustedError, type LiteToProFallback } from "@/lib/lite-pro-fallback";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { DOCS_URL } from "@/constant/env";
@@ -217,6 +219,7 @@ function ConnectionCreateOption({ theme, icon, title, description, onClick }: { 
 
 function InfiniteCanvasPage() {
     const { message, modal } = App.useApp();
+    const confirmProFallback = useLiteToProFallbackConfirmation();
     const params = useParams<{ id: string }>();
     const router = useRouter();
     const projectId = params.id;
@@ -250,6 +253,19 @@ function InfiniteCanvasPage() {
 
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
+    const requestImageWithExplicitProFallback = useCallback(
+        async <T,>(generationConfig: AiConfig, request: (fallback?: LiteToProFallback) => Promise<T>): Promise<{ result: T; fallback: LiteToProFallback | null }> => {
+            try {
+                return { result: await request(), fallback: null };
+            } catch (error) {
+                if (!isLitePoolExhaustedError(error)) throw error;
+                const fallback = await confirmProFallback(generationConfig, 1);
+                if (!fallback) throw error;
+                return { result: await request(fallback), fallback };
+            }
+        },
+        [confirmProFallback],
+    );
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
@@ -1710,10 +1726,17 @@ function InfiniteCanvasPage() {
             setDialogNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
-                const image = await requestEdit(generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, { signal: controller.signal }).then((items) => items[0]);
+                const { result: images, fallback } = await requestImageWithExplicitProFallback(generationConfig, (fallback) =>
+                    requestEdit(generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, {
+                        signal: controller.signal,
+                        ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
+                    }),
+                );
+                const image = images[0];
                 const uploaded = await uploadImage(image.dataUrl);
                 const size = fitNodeSize(uploaded.width, uploaded.height, node.width, node.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                const actualMetadata = fallback ? buildImageGenerationMetadata("edit", { ...generationConfig, model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size }, 1, [source]) : generationMetadata;
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...actualMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "局部修改失败";
@@ -1724,7 +1747,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, requestImageWithExplicitProFallback, startGenerationRequest],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -1764,9 +1787,8 @@ function InfiniteCanvasPage() {
             const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             const title = buildAngleLabel(params);
             const prompt = buildAnglePrompt(params);
-            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [
-                { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey },
-            ]);
+            const angleSource = { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
+            const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [angleSource]);
             setAngleNodeId(null);
             setRunningNodeId(childId);
             setNodes((prev) => [
@@ -1786,12 +1808,17 @@ function InfiniteCanvasPage() {
             setDialogNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             try {
-                const image = await requestEdit(generationConfig, prompt, [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }], undefined, { signal: controller.signal }).then(
-                    (items) => items[0],
+                const { result: images, fallback } = await requestImageWithExplicitProFallback(generationConfig, (fallback) =>
+                    requestEdit(generationConfig, prompt, [angleSource], undefined, {
+                        signal: controller.signal,
+                        ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
+                    }),
                 );
+                const image = images[0];
                 const uploaded = await uploadImage(image.dataUrl);
                 const size = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...generationMetadata } } : item)));
+                const actualMetadata = fallback ? buildImageGenerationMetadata("edit", { ...generationConfig, model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size }, 1, [angleSource]) : generationMetadata;
+                setNodes((prev) => prev.map((item) => (item.id === childId ? { ...item, width: size.width, height: size.height, metadata: { ...item.metadata, ...imageMetadata(uploaded), prompt, ...actualMetadata } } : item)));
             } catch (error) {
                 if (isGenerationCanceled(error)) return;
                 const errorDetails = error instanceof Error ? error.message : "生成失败";
@@ -1801,7 +1828,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, openConfigDialog, requestImageWithExplicitProFallback, startGenerationRequest],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2064,52 +2091,91 @@ function InfiniteCanvasPage() {
                     if (count > 1) startGenerationRequest(rootId, nodeId, nodeId, controller);
                     let hasSuccess = false;
                     let hasFailure = false;
+                    const successfulTargetIds = new Set<string>();
+                    const exhaustedTargetIds: string[] = [];
+                    const runImageTarget = async (targetId: string, fallback?: LiteToProFallback) => {
+                        const options = {
+                            signal: controller.signal,
+                            ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
+                        };
+                        return referenceImages.length
+                            ? requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, options).then((items) => items[0])
+                            : requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, options).then((items) => items[0]);
+                    };
+                    const applyImageTarget = async (targetId: string, fallback?: LiteToProFallback) => {
+                        const image = await runImageTarget(targetId, fallback);
+                        const uploaded = await uploadImage(image.dataUrl);
+                        const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
+                        setNodes((prev) => {
+                            const root = prev.find((node) => node.id === rootId);
+                            return prev.map((node) => {
+                                if (node.id !== targetId && node.id !== rootId) return node;
+                                const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
+                                const fallbackMetadata = fallback ? buildImageGenerationMetadata(generationType, { ...generationConfig, model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size }, 1, referenceImages) : {};
+                                if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId))
+                                    return {
+                                        ...node,
+                                        position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
+                                        width: imageSize.width,
+                                        height: imageSize.height,
+                                        metadata: { ...node.metadata, ...imageMetadata(uploaded), ...fallbackMetadata, primaryImageId: targetId },
+                                    };
+                                if (node.id === targetId)
+                                    return {
+                                        ...node,
+                                        position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
+                                        width: imageSize.width,
+                                        height: imageSize.height,
+                                        metadata: { ...node.metadata, ...imageMetadata(uploaded), ...fallbackMetadata },
+                                    };
+                                return node;
+                            });
+                        });
+                    };
                     await Promise.all(
                         targetIds.map(async (targetId) => {
                             try {
-                                const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
-                                const uploaded = await uploadImage(image.dataUrl);
-                                const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                                setNodes((prev) => {
-                                    const root = prev.find((node) => node.id === rootId);
-                                    return prev.map((node) => {
-                                        if (node.id !== targetId && node.id !== rootId) return node;
-                                        const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
-                                        if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId))
-                                            return {
-                                                ...node,
-                                                position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
-                                                width: imageSize.width,
-                                                height: imageSize.height,
-                                                metadata: { ...node.metadata, ...imageMetadata(uploaded), primaryImageId: targetId },
-                                            };
-                                        if (node.id === targetId)
-                                            return {
-                                                ...node,
-                                                position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
-                                                width: imageSize.width,
-                                                height: imageSize.height,
-                                                metadata: { ...node.metadata, ...imageMetadata(uploaded) },
-                                            };
-                                        return node;
-                                    });
-                                });
+                                await applyImageTarget(targetId);
                                 hasSuccess = true;
+                                successfulTargetIds.add(targetId);
                                 if (isConfigNode) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
                                 return true;
                             } catch (error) {
                                 if (isGenerationCanceled(error)) return false;
+                                if (isLitePoolExhaustedError(error)) exhaustedTargetIds.push(targetId);
                                 const errorDetails = error instanceof Error ? error.message : "生成失败";
                                 hasFailure = true;
                                 setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
                             } finally {
-                                finishGenerationRequest(targetId, controller);
+                                if (!exhaustedTargetIds.includes(targetId)) finishGenerationRequest(targetId, controller);
                             }
                             return false;
                         }),
                     );
+                    if (exhaustedTargetIds.length && !controller.signal.aborted) {
+                        const fallback = await confirmProFallback(generationConfig, exhaustedTargetIds.length);
+                        if (fallback && !controller.signal.aborted) {
+                            await Promise.all(
+                                exhaustedTargetIds.map(async (targetId) => {
+                                    try {
+                                        setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
+                                        await applyImageTarget(targetId, fallback);
+                                        hasSuccess = true;
+                                        successfulTargetIds.add(targetId);
+                                    } catch (error) {
+                                        if (isGenerationCanceled(error)) {
+                                            setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
+                                            return;
+                                        }
+                                        const errorDetails = error instanceof Error ? error.message : "专业版重试失败";
+                                        setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
+                                    }
+                                }),
+                            );
+                            hasFailure = successfulTargetIds.size < targetIds.length;
+                        }
+                    }
+                    exhaustedTargetIds.forEach((targetId) => finishGenerationRequest(targetId, controller));
                     if (count > 1) finishGenerationRequest(rootId, controller);
                     if (controller.signal.aborted) {
                         setNodes((prev) => prev.map((node) => (node.id === nodeId && isConfigNode && node.metadata?.status === NODE_STATUS_LOADING ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
@@ -2320,13 +2386,21 @@ function InfiniteCanvasPage() {
                     return;
                 }
 
-                const image = useReferenceImages ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal }).then((items) => items[0]) : await requestGeneration(generationConfig, prompt, { signal: controller.signal }).then((items) => items[0]);
+                const { result: images, fallback } = await requestImageWithExplicitProFallback(generationConfig, (fallback) => {
+                    const options = {
+                        signal: controller.signal,
+                        ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
+                    };
+                    return useReferenceImages ? requestEdit(generationConfig, prompt, retryImages, undefined, options) : requestGeneration(generationConfig, prompt, options);
+                });
+                const image = images[0];
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
+                const actualConfig = fallback ? { ...generationConfig, model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size } : generationConfig;
                 const generationMetadata = savedImageMetadata?.generationType
-                    ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, size: generationConfig.size, quality: generationConfig.quality, imageAsync: generationConfig.imageAsync, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
-                    : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
+                    ? { generationType: savedImageMetadata.generationType, model: actualConfig.model, size: actualConfig.size, quality: actualConfig.quality, imageAsync: actualConfig.imageAsync, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
+                    : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", actualConfig, 1, retryImages);
                 setNodes((prev) =>
                     prev.map((item) =>
                         item.id === node.id
@@ -2350,7 +2424,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, requestImageWithExplicitProFallback, startGenerationRequest],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -3003,6 +3077,7 @@ function buildImageGenerationMetadata(type: CanvasImageGenerationType, config: A
     return {
         generationType: type,
         model: config.model,
+        group: config.group,
         size: config.size,
         quality: config.quality,
         count,
