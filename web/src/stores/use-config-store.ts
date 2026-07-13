@@ -179,6 +179,8 @@ export function isHiddenCompatibilityImageModel(model: string) {
 
 const GPT_IMAGE_LITE = "gpt-image-2-lite";
 const GPT_IMAGE_PRO = "gpt-image-2-pro";
+const GPT_IMAGE_LITE_GROUP = "GPT生图特价";
+const GPT_IMAGE_PRO_GROUP = "GPT生图专用";
 
 export function migrateLegacyGptImageConfig(config: AiConfig): AiConfig {
     const defaultChannelIndex = config.channels.findIndex((channel) => channel.id === "default");
@@ -384,14 +386,22 @@ export function resolveModelChannel(config: AiConfig, value: string) {
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
+    const model = modelOptionName(value || config.model);
+    const group = isNewApiMode(channel)
+        ? model === GPT_IMAGE_PRO
+            ? GPT_IMAGE_PRO_GROUP
+            : model === GPT_IMAGE_LITE || model === "gpt-image-2"
+              ? GPT_IMAGE_LITE_GROUP
+              : channel.group
+        : channel.group;
     return {
         ...config,
-        model: modelOptionName(value || config.model),
+        model,
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
         apiMode: channel.apiMode,
-        group: channel.group,
+        group,
     };
 }
 

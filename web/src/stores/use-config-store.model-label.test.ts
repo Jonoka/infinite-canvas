@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { defaultConfig, isHiddenCompatibilityImageModel, migrateLegacyGptImageConfig, modelOptionLabel, selectableModelsByCapability } from "./use-config-store";
+import { defaultConfig, isHiddenCompatibilityImageModel, migrateLegacyGptImageConfig, modelOptionLabel, resolveModelRequestConfig, selectableModelsByCapability } from "./use-config-store";
 
 assert.equal(modelOptionLabel(defaultConfig, "gpt-image-2-lite"), "GPT Image 2 · 轻量版");
 assert.equal(modelOptionLabel(defaultConfig, "gpt-image-2-pro"), "GPT Image 2 · 专业版");
@@ -46,6 +46,20 @@ assert.deepEqual(
     "legacy pro-only image choices should gain lite",
 );
 assert.equal(migratedLegacyConfig.imageModel, "default::gpt-image-2-lite", "legacy pro-only defaults should migrate to lite");
+
+const sharedLegacyImageChannel = {
+    ...defaultConfig,
+    channels: [
+        {
+            ...defaultConfig.channels[0],
+            apiMode: "newapi" as const,
+            group: "GPT生图特价",
+            models: ["gpt-image-2-lite", "gpt-image-2-pro"],
+        },
+    ],
+};
+assert.equal(resolveModelRequestConfig(sharedLegacyImageChannel, "default::gpt-image-2-lite").group, "GPT生图特价", "lite should keep the legacy channel group");
+assert.equal(resolveModelRequestConfig(sharedLegacyImageChannel, "default::gpt-image-2-pro").group, "GPT生图专用", "pro must route through its dedicated New API group even when an older shared channel persisted the discount group");
 
 const configuredLiteAndPro = {
     ...defaultConfig,
