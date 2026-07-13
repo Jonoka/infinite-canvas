@@ -11,6 +11,7 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { formatImageCost, useImageCost } from "@/hooks/use-image-cost";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -94,6 +95,7 @@ export default function ImagePage() {
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
+    const estimatedCost = useImageCost(effectiveConfig, model, generationCount);
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -410,6 +412,11 @@ export default function ImagePage() {
                         </div>
 
                         <div className="mt-auto pt-6">
+                            {estimatedCost ? (
+                                <div className="mb-2 text-center text-xs text-stone-500 dark:text-stone-400" title={`按 ${estimatedCost.group} 分组当前定价估算`}>
+                                    预计费用 {formatImageCost(estimatedCost.cost)}
+                                </div>
+                            ) : null}
                             <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
                                 开始生成
                             </Button>

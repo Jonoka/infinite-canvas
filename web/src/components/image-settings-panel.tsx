@@ -3,6 +3,7 @@
 import { type ReactNode, useState } from "react";
 import { ConfigProvider, Switch } from "antd";
 
+import { formatImageCost, useImageCost } from "@/hooks/use-image-cost";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
 
@@ -76,6 +77,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
     const availableAspectOptions = modelSettings.aspectOptions;
     const quality = effectiveImageQuality(config.model || config.imageModel, config.quality || "auto");
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const estimatedCost = useImageCost(config, config.model || config.imageModel, count);
     const activeSize = config.size || "auto";
     const selectedAspect = availableAspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
     const dimensions = displaySizeDimensions(config.model || config.imageModel, quality, activeSize, selectedAspect || availableAspectOptions[0]);
@@ -162,6 +164,11 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         <CountInput value={count} max={maxCount} theme={theme} onChange={(value) => onConfigChange("count", String(value || 1))} />
                     </div>
                 </div>
+                {estimatedCost ? (
+                    <div className="text-xs" style={{ color: theme.node.muted }} title={`按 ${estimatedCost.group} 分组当前定价估算`}>
+                        预计费用 {formatImageCost(estimatedCost.cost)}
+                    </div>
+                ) : null}
                 {showAsyncSwitch ? (
                     <div className="flex items-center justify-between gap-3 rounded-xl px-1 py-1">
                         <div>

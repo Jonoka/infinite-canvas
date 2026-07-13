@@ -5,6 +5,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- New API 登录态模式下，生图工作台“开始生成”按钮附近和画布共用图像设置面板会从 `/canvas/v1/pricing` 动态读取当前模型、分组倍率并展示预计费用；固定分组仅在模型启用该分组时估算，`auto` 会按服务端 `auto_groups` 选择模型首个可用的实际分组倍率。定价读取失败不影响生成，请验证切换模型、分组和张数时估算值同步更新，且请求使用的分组配置不被改写。
+
 - 生图工作台与无限画布新增 `gpt-image-2-lite`（GPT Image 2 · 轻量版）和 `gpt-image-2-pro`（GPT Image 2 · 专业版），并保留 `gpt-image-2` 兼容项。轻量版设置仅展示 1K 与宽高比，请求固定使用 low/1K 映射，并仅在实际请求提示词末尾追加可替换、不累积的中文比例构图约束，不修改用户保存的原提示词且不承诺精确像素；专业版展示 1K/2K/4K 与比例组合，同时保留可直接编辑的宽高像素输入框，其中 9:16 4K 请求使用已验证的 `2160x3840`。
 
 - New API 登录态模式：从 New API 的无限画布入口打开 `canvas.jo2api.com` 时，URL 会携带 `mode=newapi`、`baseUrl=<New API Origin>/canvas` 和 `group`；画布配置会自动切换为“New API 登录态”，不要求填写 API Key。生图、图像编辑、异步轮询、视频、音频和助手文本请求应通过 `/canvas/v1/...` 携带登录 Cookie 与 `group` 参数发给 New API，由 New API 服务端代理上游，浏览器请求不得带 `Authorization: Bearer ...`。
