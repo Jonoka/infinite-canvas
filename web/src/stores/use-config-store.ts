@@ -177,6 +177,40 @@ export function isHiddenCompatibilityImageModel(model: string) {
     return modelOptionName(model).toLowerCase() === "gpt-image-2";
 }
 
+const GPT_IMAGE_LITE = "gpt-image-2-lite";
+const GPT_IMAGE_PRO = "gpt-image-2-pro";
+
+export function migrateLegacyGptImageConfig(config: AiConfig): AiConfig {
+    const defaultChannelIndex = config.channels.findIndex((channel) => channel.id === "default");
+    if (defaultChannelIndex < 0) return config;
+
+    const defaultChannel = config.channels[defaultChannelIndex];
+    const imageFamily = defaultChannel.models.map((model) => model.toLowerCase()).filter((model) => model === "gpt-image-2" || model === GPT_IMAGE_LITE || model === GPT_IMAGE_PRO);
+    if (!imageFamily.length) return config;
+
+    const wasProOnly = imageFamily.length === 1 && imageFamily[0] === GPT_IMAGE_PRO;
+    const wasCompatibilityOnly = imageFamily.length === 1 && imageFamily[0] === "gpt-image-2";
+    if (!wasProOnly && !wasCompatibilityOnly) return config;
+
+    const nextDefaultModels = [GPT_IMAGE_LITE, ...defaultChannel.models.filter((model) => ![GPT_IMAGE_LITE, "gpt-image-2"].includes(model.toLowerCase()))];
+    if (!nextDefaultModels.some((model) => model.toLowerCase() === GPT_IMAGE_PRO)) nextDefaultModels.push(GPT_IMAGE_PRO);
+
+    const channels = config.channels.map((channel, index) => index === defaultChannelIndex ? { ...channel, models: nextDefaultModels } : channel);
+    const liteOption = encodeChannelModel(defaultChannel.id, GPT_IMAGE_LITE);
+    const proOption = encodeChannelModel(defaultChannel.id, GPT_IMAGE_PRO);
+    const models = modelOptionsFromChannels(channels);
+    const imageModels = Array.from(new Set([liteOption, ...config.imageModels.filter((model) => model !== liteOption && !isHiddenCompatibilityImageModel(model)), proOption]));
+
+    return {
+        ...config,
+        channels,
+        models,
+        imageModels,
+        imageModel: wasProOnly && modelOptionName(config.imageModel).toLowerCase() === GPT_IMAGE_PRO ? liteOption : config.imageModel,
+        model: wasProOnly && modelOptionName(config.model).toLowerCase() === GPT_IMAGE_PRO ? liteOption : config.model,
+    };
+}
+
 function modelListKey(capability: ModelCapability) {
     return `${capability}Models` as "imageModels" | "videoModels" | "textModels" | "audioModels";
 }
@@ -223,37 +257,38 @@ export const useConfigStore = create<ConfigStore>()(
                 if (!Array.isArray(persistedConfig.channels)) config.channels = [];
                 const channels = normalizeChannels(config);
                 const models = modelOptionsFromChannels(channels);
+                const migratedConfig = migrateLegacyGptImageConfig({
+                    ...config,
+                    channelMode: "local",
+                    apiFormat: normalizeApiFormat(config.apiFormat),
+                    apiMode: normalizeApiMode(config.apiMode),
+                    group: config.group || "",
+                    channels,
+                    models,
+                    imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
+                    videoModel: normalizeModelOptionValue(config.videoModel || "grok-imagine-video", channels),
+                    textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
+                    audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
+                    audioVoice: config.audioVoice || defaultConfig.audioVoice,
+                    audioFormat: config.audioFormat || defaultConfig.audioFormat,
+                    audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
+                    audioInstructions: config.audioInstructions || "",
+                    videoSeconds: config.videoSeconds || "6",
+                    vquality: config.vquality || "720",
+                    videoGenerateAudio: config.videoGenerateAudio || "true",
+                    videoWatermark: config.videoWatermark || "false",
+                    videoReferenceMode: config.videoReferenceMode || "image",
+                    canvasImageCount: config.canvasImageCount || "3",
+                    imageAsync: config.imageAsync || "false",
+                    imageModels: capabilityModelList(config.imageModels, persistedConfig.imageModels, channels, models, "image"),
+                    videoModels: capabilityModelList(config.videoModels, persistedConfig.videoModels, channels, models, "video"),
+                    textModels: capabilityModelList(config.textModels, persistedConfig.textModels, channels, models, "text"),
+                    audioModels: capabilityModelList(config.audioModels, persistedConfig.audioModels, channels, models, "audio"),
+                });
                 return {
                     ...current,
                     webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
-                    config: {
-                        ...config,
-                        channelMode: "local",
-                        apiFormat: normalizeApiFormat(config.apiFormat),
-                        apiMode: normalizeApiMode(config.apiMode),
-                        group: config.group || "",
-                        channels,
-                        models,
-                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel || "grok-imagine-video", channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
-                        audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
-                        audioVoice: config.audioVoice || defaultConfig.audioVoice,
-                        audioFormat: config.audioFormat || defaultConfig.audioFormat,
-                        audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
-                        audioInstructions: config.audioInstructions || "",
-                        videoSeconds: config.videoSeconds || "6",
-                        vquality: config.vquality || "720",
-                        videoGenerateAudio: config.videoGenerateAudio || "true",
-                        videoWatermark: config.videoWatermark || "false",
-                        videoReferenceMode: config.videoReferenceMode || "image",
-                        canvasImageCount: config.canvasImageCount || "3",
-                        imageAsync: config.imageAsync || "false",
-                        imageModels: capabilityModelList(config.imageModels, persistedConfig.imageModels, channels, models, "image"),
-                        videoModels: capabilityModelList(config.videoModels, persistedConfig.videoModels, channels, models, "video"),
-                        textModels: capabilityModelList(config.textModels, persistedConfig.textModels, channels, models, "text"),
-                        audioModels: capabilityModelList(config.audioModels, persistedConfig.audioModels, channels, models, "audio"),
-                    },
+                    config: migratedConfig,
                 };
             },
         },
