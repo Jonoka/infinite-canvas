@@ -31,7 +31,9 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install locked dependencies
-        run: npm ci
+        # Upstream v0.9 currently pairs antd 6 with a Pro Components beta whose
+        # published peer range still names antd 5; honor the committed lockfile.
+        run: npm ci --legacy-peer-deps
 
       - name: Typecheck
         run: npm run typecheck
