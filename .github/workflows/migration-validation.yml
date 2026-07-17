@@ -35,6 +35,12 @@ jobs:
         # peer range still names antd 5; the committed lockfile is authoritative.
         run: npm ci --legacy-peer-deps
 
+      - name: Install Rollup native binary workaround
+        # npm/cli#4828 can omit platform optional dependencies from a lockfile
+        # generated on another platform. Keep the workaround version tied to
+        # the Rollup version already locked by Vite.
+        run: npm install --no-save --ignore-scripts --legacy-peer-deps @rollup/rollup-linux-x64-gnu@4.62.2
+
       - name: Typecheck
         run: npm run typecheck
 
