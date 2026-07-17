@@ -71,6 +71,7 @@ type ResponseStreamState = { buffer: string; text: string; payload?: ResponseApi
 type ImageApiError = { message?: string; type?: string; code?: string | number };
 type ImageApiResponse = {
     data?: Array<Record<string, unknown>> | Record<string, unknown> | null;
+    result?: { data?: Array<Record<string, unknown>> | null } | null;
     error?: ImageApiError | string;
     code?: number;
     msg?: string;
@@ -316,6 +317,7 @@ function parseImagePayload(payload: ImageApiResponse) {
 
 function imageItemsFromPayload(payload: ImageApiResponse) {
     if (Array.isArray(payload.data)) return payload.data;
+    if (payload.result && Array.isArray(payload.result.data)) return payload.result.data;
     if (payload.data && typeof payload.data === "object") return [payload.data];
     return [payload as Record<string, unknown>];
 }
