@@ -19,6 +19,21 @@ const succeeded = {
 assert.throws(() => __test__.parseImagePayload(queued), /尚未完成/, "queued task should not be treated as a completed image");
 assert.deepEqual(__test__.parseImagePayload(succeeded)[0].dataUrl, "https://example.com/result.png");
 
+const canvasSucceeded = {
+    task_id: "task_canvas_1",
+    status: "SUCCESS",
+    progress: "100%",
+    result: {
+        created: 1784299951,
+        data: [{ url: "/canvas/v1/images/tasks/task_canvas_1/content/0" }],
+    },
+};
+assert.equal(
+    __test__.parseImagePayload(canvasSucceeded as never)[0].dataUrl,
+    "/canvas/v1/images/tasks/task_canvas_1/content/0",
+    "New API Canvas task results wrap image items under result.data",
+);
+
 assert.equal(__test__.imageTaskPath("task/with spaces"), "/images/tasks/task%2Fwith%20spaces");
 assert.equal(__test__.imageTaskContentPath("task/with spaces", 2), "/images/tasks/task%2Fwith%20spaces/content/2");
 assert.equal(__test__.imageTaskStatusPath("succeeded"), "content", "completed tasks should fetch their existing content");
