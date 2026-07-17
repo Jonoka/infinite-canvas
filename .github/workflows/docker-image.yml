@@ -30,8 +30,28 @@ jobs:
             type=ref,event=tag
             type=sha,prefix=
 
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install web dependencies
+        run: bun install --frozen-lockfile
+      - name: Run focused TypeScript assertions
+        run: |
+          bun src/services/api/ai-client.test.ts
+          bun src/services/api/image.async-task.test.ts
+          bun 'src/app/(user)/canvas/utils/canvas-image-task-recovery.test.ts'
+
   build:
-    needs: meta
+    needs:
+      - meta
+      - test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

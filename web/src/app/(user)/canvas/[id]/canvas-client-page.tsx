@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { BookOpen, Bot, Home, ImageIcon, Images, List, Menu, Music2, Plus, Redo2, Settings2, Trash2, Undo2, Upload, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 
-import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
+import { recoverImageTask, requestEdit, requestGeneration, requestImageQuestion, type ImageTaskAcceptance } from "@/services/api/image";
 import { useLiteToProFallbackConfirmation } from "@/hooks/use-lite-pro-fallback-confirmation";
 import { isLitePoolExhaustedError, type LiteToProFallback } from "@/lib/lite-pro-fallback";
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
@@ -44,9 +44,10 @@ import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "../compone
 import { CanvasToolbar } from "../components/canvas-toolbar";
 import { AssetPickerModal, type InsertAssetPayload } from "../components/asset-picker-modal";
 import { CanvasZoomControls } from "../components/canvas-zoom-controls";
-import { useCanvasStore } from "../stores/use-canvas-store";
+import { flushCanvasStorePersistence, useCanvasStore } from "../stores/use-canvas-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "../utils/canvas-agent-ops";
 import { buildCanvasResourceReferences, buildNodeMentionReferences } from "../utils/canvas-resource-references";
+import { canceledGenerationMetadata, canvasImageRetryAction, clearImageTaskMetadata, fitRecoveredImageNode, interruptedGenerationError } from "../utils/canvas-image-task-recovery";
 import type { CanvasAgentMode } from "../components/canvas-agent-chat-ui";
 import {
     CanvasNodeType,
@@ -337,6 +338,18 @@ function InfiniteCanvasPage() {
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
 
+    const persistAcceptedImageTask = useCallback(
+        async (nodeId: string, task: ImageTaskAcceptance) => {
+            const taskMetadata = { imageTaskId: task.id, imageTaskContentIndex: task.contentIndex, imageTaskModel: task.model, imageTaskGroup: task.group, imageTaskRecoverable: task.recoverable };
+            const nextNodes = nodesRef.current.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...taskMetadata } } : node));
+            nodesRef.current = nextNodes;
+            setNodes(nextNodes);
+            updateProject(projectId, { nodes: nextNodes });
+            await flushCanvasStorePersistence();
+        },
+        [projectId, updateProject],
+    );
+
     const createHistoryEntry = useCallback(
         (): CanvasHistoryEntry => ({
             nodes: nodesRef.current,
@@ -382,7 +395,7 @@ function InfiniteCanvasPage() {
         setNodes((prev) =>
             prev.map((node) =>
                 affectedNodeIds.has(node.id) && node.metadata?.status === NODE_STATUS_LOADING
-                    ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } }
+                    ? { ...node, metadata: canceledGenerationMetadata(node.metadata) }
                     : node,
             ),
         );
@@ -1729,6 +1742,7 @@ function InfiniteCanvasPage() {
                 const { result: images, fallback } = await requestImageWithExplicitProFallback(generationConfig, (fallback) =>
                     requestEdit(generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, {
                         signal: controller.signal,
+                        onTaskAccepted: (task) => persistAcceptedImageTask(childId, task),
                         ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
                     }),
                 );
@@ -1747,7 +1761,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, requestImageWithExplicitProFallback, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, persistAcceptedImageTask, requestImageWithExplicitProFallback, startGenerationRequest],
     );
 
     const upscaleImageNode = useCallback(async (node: CanvasNodeData, params: CanvasImageUpscaleParams) => {
@@ -1811,6 +1825,7 @@ function InfiniteCanvasPage() {
                 const { result: images, fallback } = await requestImageWithExplicitProFallback(generationConfig, (fallback) =>
                     requestEdit(generationConfig, prompt, [angleSource], undefined, {
                         signal: controller.signal,
+                        onTaskAccepted: (task) => persistAcceptedImageTask(childId, task),
                         ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
                     }),
                 );
@@ -1828,7 +1843,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, openConfigDialog, requestImageWithExplicitProFallback, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, openConfigDialog, persistAcceptedImageTask, requestImageWithExplicitProFallback, startGenerationRequest],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -2061,7 +2076,7 @@ function InfiniteCanvasPage() {
                                             width: rootNode.width,
                                             height: rootNode.height,
                                             title: rootNode.title,
-                                            metadata: { ...node.metadata, ...rootNode.metadata, errorDetails: undefined },
+                                            metadata: { ...clearImageTaskMetadata(node.metadata || {}), ...rootNode.metadata, errorDetails: undefined },
                                         }
                                       : isImageNode
                                         ? {
@@ -2096,6 +2111,7 @@ function InfiniteCanvasPage() {
                     const runImageTarget = async (targetId: string, fallback?: LiteToProFallback) => {
                         const options = {
                             signal: controller.signal,
+                            onTaskAccepted: (task: ImageTaskAcceptance) => persistAcceptedImageTask(targetId, task),
                             ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
                         };
                         return referenceImages.length
@@ -2158,13 +2174,13 @@ function InfiniteCanvasPage() {
                             await Promise.all(
                                 exhaustedTargetIds.map(async (targetId) => {
                                     try {
-                                        setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
+                                        setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...clearImageTaskMetadata(node.metadata || {}), status: NODE_STATUS_LOADING, errorDetails: undefined } } : node)));
                                         await applyImageTarget(targetId, fallback);
                                         hasSuccess = true;
                                         successfulTargetIds.add(targetId);
                                     } catch (error) {
                                         if (isGenerationCanceled(error)) {
-                                            setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_IDLE, errorDetails: undefined } } : node)));
+                                            setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: canceledGenerationMetadata(node.metadata || {}) } : node)));
                                             return;
                                         }
                                         const errorDetails = error instanceof Error ? error.message : "专业版重试失败";
@@ -2315,7 +2331,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, persistAcceptedImageTask, startGenerationRequest],
     );
     useEffect(() => {
         generateNodeRef.current = handleGenerateNode;
@@ -2332,6 +2348,7 @@ function InfiniteCanvasPage() {
                     ? {
                           ...effectiveConfig,
                           model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
+                          group: savedImageMetadata.group || effectiveConfig.group,
                           quality: savedImageMetadata.quality || effectiveConfig.quality,
                           size: savedImageMetadata.size || effectiveConfig.size,
                           count: "1",
@@ -2339,6 +2356,44 @@ function InfiniteCanvasPage() {
                     : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
+                return;
+            }
+
+            if (canvasImageRetryAction(node) === "recover") {
+                const task = {
+                    id: node.metadata!.imageTaskId!,
+                    contentIndex: node.metadata?.imageTaskContentIndex ?? 0,
+                    model: node.metadata!.imageTaskModel || generationConfig.model,
+                    group: node.metadata!.imageTaskGroup || generationConfig.group,
+                };
+                setRunningNodeId(node.id);
+                setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
+                const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
+                try {
+                    const uploadedImage = await uploadImage(await recoverImageTask(generationConfig, task, { signal: controller.signal }));
+                    setNodes((prev) =>
+                        prev.map((item) =>
+                            item.id === node.id
+                                ? {
+                                      ...item,
+                                      ...fitRecoveredImageNode(item, uploadedImage.width, uploadedImage.height),
+                                      metadata: { ...item.metadata, ...imageMetadata(uploadedImage), errorDetails: undefined },
+                                  }
+                                : item,
+                        ),
+                    );
+                } catch (error) {
+                    if (isGenerationCanceled(error)) {
+                        setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: canceledGenerationMetadata(item.metadata || {}) } : item)));
+                        return;
+                    }
+                    const errorDetails = error instanceof Error ? error.message : "重新获取图片失败";
+                    message.error(errorDetails);
+                    setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails } } : item)));
+                } finally {
+                    finishGenerationRequest(node.id, controller);
+                    setRunningNodeId(null);
+                }
                 return;
             }
 
@@ -2360,7 +2415,7 @@ function InfiniteCanvasPage() {
             const retryImages = retryReferenceImages || [];
 
             setRunningNodeId(node.id);
-            setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
+            setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...clearImageTaskMetadata(item.metadata || {}), status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
             const controller = startGenerationRequest(node.id, sourceNode.id, node.id);
 
             try {
@@ -2389,6 +2444,7 @@ function InfiniteCanvasPage() {
                 const { result: images, fallback } = await requestImageWithExplicitProFallback(generationConfig, (fallback) => {
                     const options = {
                         signal: controller.signal,
+                        onTaskAccepted: (task: ImageTaskAcceptance) => persistAcceptedImageTask(node.id, task),
                         ...(fallback ? { requestOverride: { model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size, count: "1" } } : {}),
                     };
                     return useReferenceImages ? requestEdit(generationConfig, prompt, retryImages, undefined, options) : requestGeneration(generationConfig, prompt, options);
@@ -2399,7 +2455,7 @@ function InfiniteCanvasPage() {
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
                 const actualConfig = fallback ? { ...generationConfig, model: fallback.model, group: fallback.group, quality: fallback.quality, size: fallback.size } : generationConfig;
                 const generationMetadata = savedImageMetadata?.generationType
-                    ? { generationType: savedImageMetadata.generationType, model: actualConfig.model, size: actualConfig.size, quality: actualConfig.quality, imageAsync: actualConfig.imageAsync, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
+                    ? { generationType: savedImageMetadata.generationType, model: actualConfig.model, group: actualConfig.group, size: actualConfig.size, quality: actualConfig.quality, imageAsync: actualConfig.imageAsync, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
                     : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", actualConfig, 1, retryImages);
                 setNodes((prev) =>
                     prev.map((item) =>
@@ -2424,7 +2480,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, requestImageWithExplicitProFallback, startGenerationRequest],
+        [effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, persistAcceptedImageTask, requestImageWithExplicitProFallback, startGenerationRequest],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -3213,7 +3269,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
 }
 
 function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
-    return nodes.map((node) => (node.metadata?.status === "loading" ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } } : node));
+    return nodes.map((node) => (node.metadata?.status === "loading" ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: interruptedGenerationError(node) } } : node));
 }
 
 function isGenerationCanceled(error: unknown) {

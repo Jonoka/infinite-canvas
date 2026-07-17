@@ -100,7 +100,9 @@ type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseTool
 type RequestOptions = {
     signal?: AbortSignal;
     requestOverride?: { model?: string; group?: string; quality?: AiConfig["quality"]; size?: string; count?: string };
+    onTaskAccepted?: (task: ImageTaskAcceptance) => void | Promise<void>;
 };
+export type ImageTaskAcceptance = { id: string; contentIndex: number; model: string; group: string; recoverable: boolean };
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -336,16 +338,53 @@ function imageTaskId(payload: ImageApiResponse) {
     return payload.task_id || payload.id || "";
 }
 
+function imageTaskPath(id: string) {
+    return `/images/tasks/${encodeURIComponent(id)}`;
+}
+
+function imageTaskContentPath(id: string, contentIndex: number) {
+    return `${imageTaskPath(id)}/content/${contentIndex}`;
+}
+
+function imageTaskStatusPath(status: string) {
+    const normalized = status.toLowerCase();
+    if (["succeeded", "success", "completed"].includes(normalized)) return "content" as const;
+    if (["failed", "failure", "cancelled", "canceled", "expired"].includes(normalized)) return "failed" as const;
+    if (["queued", "pending", "running", "processing", "in_progress"].includes(normalized)) return "pending" as const;
+    return "malformed" as const;
+}
+
+function imageTaskAcceptance(config: Pick<AiConfig, "apiMode" | "model" | "group">, id: string): ImageTaskAcceptance {
+    return { id, contentIndex: 0, model: config.model, group: config.group, recoverable: isNewApiMode(config) };
+}
+
+function unwrapImageTaskStatus(payload: ImageApiResponse) {
+    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || "图片任务查询失败");
+    const task = imageTaskPayload(payload);
+    if (!task || imageTaskStatusPath(task.status || "") === "malformed") throw new Error("图片任务状态无效");
+    return task;
+}
+
+function validateImageTaskContent(content: Blob) {
+    if (!content.size) throw new Error("图片任务返回了空文件");
+    if (!content.type.toLowerCase().startsWith("image/")) throw new Error("图片任务返回的内容不是图片");
+    return content;
+}
+
 async function resolveImageResponse(config: AiConfig, payload: ImageApiResponse, taskPath = "/images/generations", options?: RequestOptions) {
+    if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || "图片请求失败");
     const task = imageTaskPayload(payload);
     if (!task) return parseImagePayload(payload);
-    if (isImageTaskSuccess(task)) return parseImagePayload(task);
+    if (isNewApiMode(config) && imageTaskStatusPath(task.status || "") === "malformed") throw new Error("图片任务状态无效");
     const id = imageTaskId(task);
     if (!id) throw new Error("图片接口没有返回任务 ID");
+    await options?.onTaskAccepted?.(imageTaskAcceptance(config, id));
+    if (isImageTaskSuccess(task)) return parseImagePayload(task);
     for (let attempt = 0; attempt < 120; attempt += 1) {
         await delay(readImageTaskDelay(task, attempt), options?.signal);
-        const response = await axios.get<ImageApiResponse>(aiApiUrl(config, `${taskPath}/${encodeURIComponent(id)}`), aiRequestOptions(config, { signal: options?.signal }));
-        const nextTask = imageTaskPayload(response.data) || response.data;
+        const pollPath = isNewApiMode(config) ? imageTaskPath(id) : `${taskPath}/${encodeURIComponent(id)}`;
+        const response = await axios.get<ImageApiResponse>(aiApiUrl(config, pollPath), aiRequestOptions(config, { signal: options?.signal }));
+        const nextTask = isNewApiMode(config) ? unwrapImageTaskStatus(response.data) : imageTaskPayload(response.data) || response.data;
         if (isImageTaskSuccess(nextTask)) return parseImagePayload(nextTask);
         const status = (nextTask.status || "").toLowerCase();
         if (["failed", "failure", "cancelled", "canceled", "expired"].includes(status)) {
@@ -854,6 +893,25 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
+export async function recoverImageTask(config: AiConfig, task: Pick<ImageTaskAcceptance, "id" | "contentIndex" | "model" | "group">, options?: Pick<RequestOptions, "signal">) {
+    const requestConfig = { ...resolveModelRequestConfig(config, task.model), model: task.model, group: task.group };
+    if (!isNewApiMode(requestConfig)) throw new ImageRequestError("仅 New API 图片任务支持恢复");
+    try {
+        const taskResponse = await axios.get<ImageApiResponse>(aiApiUrl(requestConfig, imageTaskPath(task.id)), aiRequestOptions(requestConfig, { signal: options?.signal }));
+        const status = unwrapImageTaskStatus(taskResponse.data);
+        const path = imageTaskStatusPath(status.status || "");
+        if (path === "pending") throw new Error("图片任务尚未完成，请稍后重试");
+        if (path === "failed") {
+            const details = imageApiErrorDetails(status.error);
+            throw new ImageRequestError(details.message || status.msg || "图片生成失败", details.code);
+        }
+        const content = await axios.get<Blob>(aiApiUrl(requestConfig, imageTaskContentPath(task.id, task.contentIndex)), aiRequestOptions(requestConfig, { responseType: "blob", signal: options?.signal }));
+        return validateImageTaskContent(content.data);
+    } catch (error) {
+        throw toImageRequestError(error, "重新获取图片失败");
+    }
+}
+
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
     const resolvedConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const requestConfig = { ...resolvedConfig, ...(options?.requestOverride || {}) };
@@ -955,4 +1013,4 @@ const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "
     systemPrompt: "",
 };
 
-export const __test__ = { parseImagePayload, imageTaskPayload, isImageTaskSuccess, buildGenerationRequestBody, buildEditFormData, imageApiErrorDetails, toImageRequestError };
+export const __test__ = { parseImagePayload, imageTaskPayload, isImageTaskSuccess, imageTaskPath, imageTaskContentPath, imageTaskStatusPath, imageTaskAcceptance, unwrapImageTaskStatus, validateImageTaskContent, buildGenerationRequestBody, buildEditFormData, imageApiErrorDetails, toImageRequestError };

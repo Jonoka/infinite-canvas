@@ -36,6 +36,11 @@ export type CanvasNodeMetadata = {
     quality?: string;
     count?: number;
     imageAsync?: string;
+    imageTaskId?: string;
+    imageTaskContentIndex?: number;
+    imageTaskModel?: string;
+    imageTaskGroup?: string;
+    imageTaskRecoverable?: boolean;
     seconds?: string;
     vquality?: string;
     generateAudio?: string;

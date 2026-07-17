@@ -36,7 +36,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 外部软件可通过 URL 查询参数 `baseUrl`/`baseurl` 和 `apiKey`/`apikey` 跳转到前端；读取后会从地址栏移除这些参数，后台允许自定义渠道时会自动切到自定义渠道、填入配置并打开配置弹窗，未允许时会打开配置弹窗并提示无法导入。
 - 本地直连模式默认上游域名改为 `https://api.jo2api.com`，API Key 仍由用户在前端画板配置；已验证新构建 bundle 包含 `api.jo2api.com` 且线上健康检查通过。
 - 画布生图成功但节点显示失败时，优先验证返回图片 URL 的浏览器可下载性/CORS。当前已新增 `/api/media/proxy?url=...` 图片代理，`uploadImage` 会在直接下载失败时经同源代理下载并写入本地素材存储；已用 New API 返回的 `gpt2api.com` PNG URL 验证代理返回 `200 image/png`。
-- OpenAI 兼容 `/images/generations` 若返回异步任务对象（例如 `task_id` + `status: queued/running`）而非立即返回 `data[].url` / `b64_json`，前端会自动轮询 `GET /images/generations/{task_id}`，直到 `succeeded/success/completed` 后再解析图片；需要继续用 `gpt-image-2` 4K 异步任务确认最终成功回填到画布节点。
+- OpenAI 兼容 `/images/generations` 若返回异步任务对象（例如 `task_id` + `status: queued/running`）而非立即返回 `data[].url` / `b64_json`，前端会自动轮询；New API 使用其保证的 `GET /images/tasks/{task_id}`，直连模式继续使用原请求路径的任务轮询，直到 `succeeded/success/completed` 后再解析图片。需要继续用 `gpt-image-2` 4K 异步任务确认最终成功回填到画布节点。
+- 无限画布的普通/批量生图、蒙版编辑、视角生成和失败节点重新生成会在 New API 异步任务受理后，先把任务 ID、成品序号及实际模型/分组路由持久化到画布再开始轮询；直连模式任务不会标记为可恢复。刷新或停止等待后，可恢复的失败图片显示“重新获取成品”，点击后只查询已有 `GET /images/tasks/{task_id}` 并下载 `/content/{index}` 到本地图片存储，不重新提交生成或扣费。请验证主请求与 Lite→Pro 回退路由、任务仍在运行/失败、异常状态响应、空文件或非图片下载时节点保留任务信息并可再次点击；成功后图片保持节点中心，并按节点当前边界等比适配。
 - 生图工作台和画布生图会把参考图按当前顺序显示为 `图片1`、`图片2` 等编号，并在图生图请求的实际提示词中注入编号说明；需要验证 `/image` 参考图排序、画布配置节点输入顺序和画布助手参考图编号一致。
 - GPT Image 生图请求会在前端把 `9:16`、`16:9` 等比例转换成合法 `WIDTHxHEIGHT` 尺寸，并在非法尺寸时直接显示中文错误，避免上游返回 `invalid_value Invalid size`。
 - Docker 部署时，`DATABASE_DSN=data/infinite-canvas.db` 会在存在 `/app/data` 挂载目录时自动归一到 `/app/data/infinite-canvas.db`，需要验证后台模型配置不会再因为工作目录变为 `/app/web` 而读到空库。

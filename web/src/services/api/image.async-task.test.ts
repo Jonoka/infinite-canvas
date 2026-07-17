@@ -19,6 +19,21 @@ const succeeded = {
 assert.throws(() => __test__.parseImagePayload(queued), /尚未完成/, "queued task should not be treated as a completed image");
 assert.deepEqual(__test__.parseImagePayload(succeeded)[0].dataUrl, "https://example.com/result.png");
 
+assert.equal(__test__.imageTaskPath("task/with spaces"), "/images/tasks/task%2Fwith%20spaces");
+assert.equal(__test__.imageTaskContentPath("task/with spaces", 2), "/images/tasks/task%2Fwith%20spaces/content/2");
+assert.equal(__test__.imageTaskStatusPath("succeeded"), "content", "completed tasks should fetch their existing content");
+assert.equal(__test__.imageTaskStatusPath("running"), "pending", "running tasks should not fetch content yet");
+assert.equal(__test__.imageTaskStatusPath("failed"), "failed", "failed tasks should preserve the upstream failure");
+assert.equal(__test__.imageTaskStatusPath(""), "malformed", "missing task status must not be treated as pending");
+assert.equal(__test__.imageTaskStatusPath("mystery"), "malformed", "unknown task status must not be treated as pending");
+assert.deepEqual(__test__.imageTaskAcceptance({ apiMode: "newapi", model: "gpt-image-2", group: "vip" } as never, "task-1"), { id: "task-1", contentIndex: 0, model: "gpt-image-2", group: "vip", recoverable: true });
+assert.equal(__test__.imageTaskAcceptance({ apiMode: "direct", model: "gpt-image-2", group: "" } as never, "task-1").recoverable, false, "direct async tasks must not claim the New API recovery contract");
+assert.throws(() => __test__.unwrapImageTaskStatus({ code: 500, msg: "upstream failed", data: { id: "task-1", status: "running" } } as never), /upstream failed/);
+assert.throws(() => __test__.unwrapImageTaskStatus({ code: 0, data: { id: "task-1" } } as never), /状态无效/);
+assert.equal(__test__.unwrapImageTaskStatus({ code: 0, data: { id: "task-1", status: "succeeded" } } as never).status, "succeeded");
+assert.throws(() => __test__.validateImageTaskContent(new Blob([], { type: "image/png" })), /空文件/);
+assert.throws(() => __test__.validateImageTaskContent(new Blob(["error"], { type: "application/json" })), /不是图片/);
+assert.doesNotThrow(() => __test__.validateImageTaskContent(new Blob(["image"], { type: "image/png" })));
 
 const generationBodyWithoutAsync = __test__.buildGenerationRequestBody({ quality: "auto", size: "1:1", count: "1", imageAsync: "false", model: "gpt-image-2", systemPrompt: "" } as never, "prompt");
 assert.equal(Object.prototype.hasOwnProperty.call(generationBodyWithoutAsync, "async"), false, "async should be omitted when switch is off");
