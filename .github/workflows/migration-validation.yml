@@ -30,19 +30,10 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Regenerate npm lockfile remotely
-        run: npm install --package-lock-only --legacy-peer-deps --ignore-scripts
-
-      - name: Upload regenerated lockfile
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: migration-web-package-lock
-          path: web/package-lock.json
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Require committed lockfile to be current
-        run: git diff --exit-code -- package-lock.json
+      - name: Install locked dependencies
+        # Upstream v0.9 pairs antd 6 with a Pro Components beta whose published
+        # peer range still names antd 5; the committed lockfile is authoritative.
+        run: npm ci --legacy-peer-deps
 
       - name: Typecheck
         run: npm run typecheck
