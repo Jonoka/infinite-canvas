@@ -26,6 +26,8 @@ export type ModelChannel = {
 };
 
 export type AiConfig = {
+    /** Identity of the channel selected for a resolved request; never a credential. */
+    channelId?: string;
     channelMode: "remote" | "local";
     baseUrl: string;
     apiKey: string;
@@ -437,6 +439,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
     return {
         ...config,
+        channelId: channel.id,
         model: modelOptionName(value || config.model),
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,

@@ -34,6 +34,14 @@ export type CanvasNodeMetadata = {
     fontSize?: number;
     generationMode?: CanvasGenerationMode;
     generationType?: CanvasImageGenerationType;
+    taskId?: string;
+    taskContentIndex?: number;
+    taskRecoverable?: boolean;
+    taskApiMode?: "newapi" | "direct";
+    taskModel?: string;
+    taskGroup?: string;
+    taskChannelId?: string;
+    taskBaseUrl?: string;
     model?: string;
     size?: string;
     quality?: string;

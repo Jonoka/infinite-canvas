@@ -25,6 +25,15 @@ type ImageTaskHooks = {
     validateImageTaskContent: (input: { status: number; contentType: string | null; blob: Blob }) => Blob;
     upstreamImageTaskError: (payload: unknown, fallback: string) => Error & { code?: string | number };
     buildImageContentFetchRequest: (config: AiConfig, contentUrl: string) => { url: string; options: RequestInit };
+    fetchImageTaskContent: (input: {
+        config: AiConfig;
+        contentUrl: string;
+        signal?: AbortSignal;
+        timeoutMs: number;
+        fetcher: typeof fetch;
+        setTimer: (callback: () => void, delayMs: number) => unknown;
+        clearTimer: (timer: unknown) => void;
+    }) => Promise<{ status: number; contentType: string | null; blob: Blob }>;
     resolveSubmittedImageTask: (input: {
         submittedPayload: unknown;
         config: AiConfig;
@@ -33,6 +42,7 @@ type ImageTaskHooks = {
         poll: (input: { taskId: string; timeoutMs: number; signal: AbortSignal }) => unknown | Promise<unknown>;
         pollTimeoutMs: number;
     }) => Promise<unknown>;
+    resolveImageSubmission: (config: AiConfig, kind: "generation" | "edit", payload: unknown) => Promise<Array<{ dataUrl: string }>>;
     pollImageTask: (input: {
         taskId: string;
         timeoutMs: number;
@@ -125,6 +135,7 @@ describe("Phase 2B image task acceptance protocol", () => {
     test.each<[string, unknown]>([
         ["absent outer code", { error: { message: "acceptance denied", code: "TASK_DENIED" }, data: { task_id: "must-not-accept" } }],
         ["zero outer code", { code: 0, error: { message: "acceptance denied", code: "TASK_DENIED" }, data: { task_id: "must-not-accept" } }],
+        ["error inside data", { code: 0, data: { error: { message: "acceptance denied", code: "TASK_DENIED" }, task_id: "must-not-accept" } }],
     ])("rejects an explicit nested acceptance error even with %s", (_reason, payload) => {
         try {
             hook("extractAcceptedImageTask")(payload, context());
@@ -195,6 +206,7 @@ describe("Phase 2B image task acceptance protocol", () => {
     test.each([
         { error: { message: "status denied", code: "STATUS_DENIED" }, data: { status: "completed" } },
         { code: 0, error: { message: "status denied", code: "STATUS_DENIED" }, data: { status: "completed" } },
+        { code: 0, data: { error: { message: "status denied", code: "STATUS_DENIED" }, status: "completed" } },
     ])("rejects a nested status error regardless of an absent/zero outer code", (payload) => {
         try {
             hook("unwrapImageTaskStatus")(payload);
@@ -208,6 +220,16 @@ describe("Phase 2B image task acceptance protocol", () => {
     test("parses result.data as the completed OpenAI image response", () => {
         expect(hook("parseCompletedImageTask")({ code: 0, data: { status: "completed", result: { data: [{ url: "https://cdn.example/result.png" }] } } })).toMatchObject([
             { dataUrl: "https://cdn.example/result.png" },
+        ]);
+    });
+
+    test("parses a synchronous New API success envelope through the submission resolver", async () => {
+        await expect(hook("resolveImageSubmission")(
+            config(),
+            "generation",
+            { code: 0, data: { data: [{ url: "https://cdn.example/synchronous.png" }] } },
+        )).resolves.toMatchObject([
+            { dataUrl: "https://cdn.example/synchronous.png" },
         ]);
     });
 
@@ -316,8 +338,8 @@ describe("Phase 2B image task routes and content validation", () => {
         expect(hook("buildImageTaskStatusPath")(mode, kind, "a/b ?#")).toBe(expected);
     });
 
-    test("builds the New API binary content route with encoded ID and explicit index", () => {
-        expect(hook("buildImageTaskContentPath")("id/with space", 3)).toBe("/images/tasks/id%2Fwith%20space/content/3");
+    test("builds the canonical New API binary content route with encoded ID and explicit index", () => {
+        expect(hook("buildImageTaskContentPath")("id/with space", 3)).toBe("/canvas/v1/images/tasks/id%2Fwith%20space/content/3");
     });
 
     test.each<[string, string]>([["empty", ""], ["blank", "   "]])("rejects a %s task ID when building task routes", (_reason, taskId) => {
@@ -376,8 +398,20 @@ describe("Phase 2B image task routes and content validation", () => {
         expect(calls).toEqual(["status:recover/1", "content:/canvas/v1/images/tasks/recover%2F1/content/2"]);
     });
 
+    test("canonical recovery preserves a structured error nested inside data", async () => {
+        await expect(hook("recoverImageTask")({
+            config: config(), taskId: "recover", contentIndex: 0,
+            resolveStatus: () => ({
+                code: 0,
+                data: { error: { message: "recovery denied", code: "RECOVERY_DENIED" }, task_id: "recover", status: "completed" },
+            }),
+            resolveContent: async () => ({ status: 200, contentType: "image/png", blob: new Blob(["x"]) }),
+        })).rejects.toMatchObject({ message: "recovery denied", code: "RECOVERY_DENIED" });
+    });
+
     test.each([
         { name: "status envelope", status: { code: 0, error: { message: "recovery denied", code: "RECOVERY_DENIED" }, data: { status: "completed" } }, content: { status: 200, contentType: "image/png", blob: new Blob(["x"]) } },
+        { name: "nested data envelope", status: { code: 0, data: { error: { message: "recovery denied", code: "RECOVERY_DENIED" }, status: "completed" } }, content: { status: 200, contentType: "image/png", blob: new Blob(["x"]) } },
         { name: "content URL", status: { code: 0, data: { status: "completed", result: { data: [{ url: "javascript:alert(1)" }] } } }, content: { status: 200, contentType: "image/png", blob: new Blob(["x"]) } },
         { name: "MIME", status: { code: 0, data: { status: "completed", result: { data: [{ url: "/content" }] } } }, content: { status: 200, contentType: "application/json", blob: new Blob(["{}"]) } },
         { name: "empty blob", status: { code: 0, data: { status: "completed", result: { data: [{ url: "/content" }] } } }, content: { status: 200, contentType: "image/png", blob: new Blob([]) } },
@@ -396,6 +430,39 @@ describe("Phase 2B task content URL and credential policy", () => {
         expect(request.url).toBe("https://new-api.example.com/canvas/v1/images/tasks/task-1/content/0");
         expect(request.options.credentials).toBe("include");
         expect(new Headers(request.options.headers).has("Authorization")).toBe(false);
+    });
+
+    test.each([
+        "https://new-api.example.com",
+        "https://new-api.example.com/",
+        "https://new-api.example.com/console",
+        "https://new-api.example.com/console/",
+        "https://new-api.example.com/canvas/v1",
+    ])("preserves the canonical fallback content URL for saved base %s", (baseUrl) => {
+        const path = hook("buildImageTaskContentPath")("saved/task", 4);
+        expect(hook("buildImageContentFetchRequest")(config({ baseUrl }), path).url)
+            .toBe("https://new-api.example.com/canvas/v1/images/tasks/saved%2Ftask/content/4");
+    });
+
+    test("bounds a hung native recovery content fetch without a caller signal", async () => {
+        let fetchSignal: AbortSignal | undefined;
+        let cleared = false;
+        const pending = hook("fetchImageTaskContent")({
+            config: config(), contentUrl: "/canvas/v1/images/tasks/hung/content/0", timeoutMs: 3_000,
+            fetcher: ((_url: RequestInfo | URL, init?: RequestInit) => {
+                fetchSignal = init?.signal || undefined;
+                return new Promise<Response>(() => {});
+            }) as typeof fetch,
+            setTimer: (callback, delayMs) => {
+                expect(delayMs).toBe(3_000);
+                queueMicrotask(callback);
+                return "content-timer";
+            },
+            clearTimer: (timer) => { expect(timer).toBe("content-timer"); cleared = true; },
+        });
+        await expect(pending).rejects.toThrow(/timeout|timed out|超时/i);
+        expect(fetchSignal?.aborted).toBe(true);
+        expect(cleared).toBe(true);
     });
 
     test("keeps a cross-origin absolute signed URL unchanged, omits credentials, and does not attach Authorization", () => {

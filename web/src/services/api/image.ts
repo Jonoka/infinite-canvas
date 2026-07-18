@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { assertModelCapability, buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { assertModelCapability, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { aiApiUrl, aiFetchOptions, aiRequestOptions, assertAiConfig } from "./ai-client";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
@@ -69,10 +69,15 @@ type ResponseApiPayload = {
 type ResponseStreamState = { buffer: string; text: string; payload?: ResponseApiPayload; error?: string };
 
 type ImageApiResponse = {
-    data?: Array<Record<string, unknown>>;
+    data?: Array<Record<string, unknown>> | Record<string, unknown> | null;
+    result?: { data?: Array<Record<string, unknown>> | null } | null;
     error?: { message?: string };
-    code?: number;
+    code?: string | number;
     msg?: string;
+    id?: string;
+    task_id?: string;
+    status?: string;
+    retry_after?: number;
 };
 type GeminiPart = {
     text?: string;
@@ -92,7 +97,24 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+export type ImageTaskAcceptance = {
+    taskId: string;
+    contentIndex: number;
+    apiMode: "newapi" | "direct";
+    model: string;
+    group: string;
+    channelId: string;
+    baseUrl: string;
+    recoverable: boolean;
+};
+export type RequestOptions = { signal?: AbortSignal; onTaskAccepted?: (task: ImageTaskAcceptance) => void | Promise<void> };
+
+export class ImageRequestError extends Error {
+    constructor(message: string, public readonly code?: string | number) {
+        super(message);
+        this.name = "ImageRequestError";
+    }
+}
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -287,20 +309,321 @@ function resolveImageDataUrl(item: Record<string, unknown>) {
 }
 
 function parseImagePayload(payload: ImageApiResponse) {
-    if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new Error(payload.msg || "请求失败");
-    }
-    const images =
-        payload.data
-            ?.map(resolveImageDataUrl)
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    assertNoImageTaskError(payload, "请求失败");
+    const data = Array.isArray(payload.data) ? payload.data : payload.result && Array.isArray(payload.result.data) ? payload.result.data : [];
+    const images = data
+        .map(resolveImageDataUrl)
+        .filter((value): value is string => Boolean(value))
+        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
 
-    if (images.length === 0) {
-        throw new Error("接口没有返回图片");
-    }
-
+    if (images.length === 0) throw new Error("接口没有返回图片");
     return images;
+}
+
+type ImageTaskContext = {
+    apiMode: "newapi" | "direct";
+    model: string;
+    group: string;
+    channelId: string;
+    baseUrl: string;
+    kind: "generation" | "edit";
+};
+
+function upstreamImageTaskError(payload: unknown, fallback: string) {
+    const value = isRecord(payload) ? payload : {};
+    const nested = imageTaskErrorEnvelope(value);
+    const code = typeof nested?.code === "string" || typeof nested?.code === "number"
+        ? nested.code
+        : typeof value.code === "string" || typeof value.code === "number" ? value.code : undefined;
+    return new ImageRequestError(stringValue(nested?.message) || stringValue(value.msg) || fallback, code);
+}
+
+function imageTaskErrorEnvelope(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+    if (isRecord(payload.error)) return payload.error;
+    return isRecord(payload.data) ? imageTaskErrorEnvelope(payload.data) : undefined;
+}
+
+function assertNoImageTaskError(payload: unknown, fallback: string) {
+    if (!isRecord(payload)) return;
+    if (imageTaskErrorEnvelope(payload) || (payload.code !== undefined && payload.code !== 0 && payload.code !== "0")) {
+        throw upstreamImageTaskError(payload, fallback);
+    }
+}
+
+function normalizedProvenanceBaseUrl(value: string) {
+    let url: URL;
+    try { url = new URL(value.trim()); } catch { throw new ImageRequestError("图片任务来源 URL 无效"); }
+    const credentialQuery = Array.from(url.searchParams.keys()).some((key) => /^(?:api[_-]?key|access[_-]?token|token|password|secret|authorization)$/i.test(key));
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || credentialQuery) throw new ImageRequestError("图片任务来源 URL 协议或凭据无效");
+    return url.toString().replace(/\/$/, "");
+}
+
+function successfulEnvelope(payload: unknown, fallback: string) {
+    if (!isRecord(payload)) throw new ImageRequestError(fallback);
+    assertNoImageTaskError(payload, fallback);
+    return isRecord(payload.data) ? payload.data : payload;
+}
+
+function extractAcceptedImageTask(payload: unknown, context: ImageTaskContext): ImageTaskAcceptance {
+    const value = successfulEnvelope(payload, "图片任务提交失败");
+    const id = typeof value.task_id === "string" ? value.task_id : typeof value.id === "string" ? value.id : "";
+    if (!id.trim()) throw new ImageRequestError("图片接口没有返回有效任务 ID");
+    return {
+        taskId: id.trim(), contentIndex: 0, apiMode: context.apiMode, model: context.model, group: context.group,
+        channelId: context.channelId, baseUrl: normalizedProvenanceBaseUrl(context.baseUrl), recoverable: context.apiMode === "newapi",
+    };
+}
+
+async function notifyAcceptedImageTask(payload: unknown, context: ImageTaskContext, onAccepted: (task: ImageTaskAcceptance) => void | Promise<void>) {
+    await onAccepted(extractAcceptedImageTask(payload, context));
+}
+
+function classifyImageTaskStatus(status: unknown, _apiMode: "newapi" | "direct") {
+    const value = typeof status === "string" ? status.trim().toLowerCase() : "";
+    if (["success", "succeeded", "completed"].includes(value)) return "success" as const;
+    if (["pending", "submitted", "not_start", "queued", "running", "processing", "in_progress"].includes(value)) return "pending" as const;
+    if (["failed", "failure", "cancelled", "canceled", "expired"].includes(value)) return "failure" as const;
+    throw new ImageRequestError("图片任务状态无效");
+}
+
+function unwrapImageTaskStatus(payload: unknown) { return successfulEnvelope(payload, "图片任务查询失败"); }
+function parseCompletedImageTask(payload: unknown) {
+    assertNoImageTaskError(payload, "图片任务解析失败");
+    const task = unwrapImageTaskStatus(payload);
+    return parseImagePayload((isRecord(task.result) ? task.result : task) as ImageApiResponse);
+}
+function validTaskId(taskId: string) {
+    const value = taskId.trim();
+    if (!value) throw new ImageRequestError("图片任务 ID 无效");
+    return encodeURIComponent(value);
+}
+function buildImageTaskStatusPath(apiMode: "newapi" | "direct", kind: "generation" | "edit", taskId: string) {
+    const id = validTaskId(taskId);
+    return apiMode === "newapi" ? `/images/tasks/${id}` : `/images/${kind === "edit" ? "edits" : "generations"}/${id}`;
+}
+function buildImageTaskContentPath(taskId: string, contentIndex: number) {
+    if (!Number.isInteger(contentIndex) || contentIndex < 0) throw new ImageRequestError("图片任务内容索引无效");
+    return `/canvas/v1/images/tasks/${validTaskId(taskId)}/content/${contentIndex}`;
+}
+function validateImageTaskContent(input: { status: number; contentType: string | null; blob: Blob }) {
+    if (input.status < 200 || input.status >= 300) throw new ImageRequestError(`图片任务内容请求状态异常：${input.status}`);
+    if (!input.contentType?.toLowerCase().startsWith("image/")) throw new ImageRequestError("图片任务内容 MIME 类型无效");
+    if (!input.blob.size) throw new ImageRequestError("图片任务返回了空内容");
+    return input.blob;
+}
+function buildImageContentFetchRequest(config: AiConfig, contentUrl: string) {
+    const value = contentUrl.trim();
+    if (!value || value.startsWith("//")) throw new ImageRequestError("图片内容 URL 协议无效");
+    const base = new URL(normalizedProvenanceBaseUrl(config.baseUrl));
+    let url: URL;
+    try { url = value.startsWith("/") ? new URL(value, base.origin) : new URL(value); } catch { throw new ImageRequestError("图片内容 URL 无效"); }
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new ImageRequestError("图片内容 URL 协议或凭据无效");
+    const sameOrigin = url.origin === base.origin;
+    const options = aiFetchOptions(config, { method: "GET", credentials: sameOrigin ? "include" : "omit" });
+    const headers = new Headers(options.headers);
+    headers.delete("Authorization");
+    options.headers = headers;
+    options.credentials = sameOrigin ? "include" : "omit";
+    return { url: url.toString(), options };
+}
+
+async function fetchImageTaskContent(input: {
+    config: AiConfig;
+    contentUrl: string;
+    signal?: AbortSignal;
+    timeoutMs: number;
+    fetcher: typeof fetch;
+    setTimer: (callback: () => void, delayMs: number) => unknown;
+    clearTimer: (timer: unknown) => void;
+}) {
+    if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new ImageRequestError("图片任务内容超时配置无效");
+    const request = buildImageContentFetchRequest(input.config, input.contentUrl);
+    const controller = new AbortController();
+    let rejectTimeout!: (error: Error) => void;
+    const timeout = new Promise<never>((_resolve, reject) => { rejectTimeout = reject; });
+    const timer = input.setTimer(() => {
+        controller.abort();
+        rejectTimeout(new ImageRequestError("图片任务内容请求超时"));
+    }, input.timeoutMs);
+    try {
+        const content = input.fetcher(request.url, {
+            ...request.options, signal: combinedAbortSignal(controller.signal, input.signal),
+        }).then(async (response) => ({
+            status: response.status,
+            contentType: response.headers.get("content-type"),
+            blob: await response.blob(),
+        }));
+        return await Promise.race([content, timeout]);
+    } finally {
+        input.clearTimer(timer);
+    }
+}
+
+async function resolveSubmittedImageTask(input: {
+    submittedPayload: unknown;
+    config: AiConfig;
+    kind: "generation" | "edit";
+    onAccepted: (task: ImageTaskAcceptance) => void | Promise<void>;
+    poll: (input: { taskId: string; timeoutMs: number; signal: AbortSignal }) => unknown | Promise<unknown>;
+    pollTimeoutMs: number;
+}) {
+    assertNoImageTaskError(input.submittedPayload, "图片任务提交失败");
+    // Production passes the exact config resolved before submission. Keep that
+    // provenance authoritative; raw pure-seam callers are resolved once here.
+    const selected = (input.config.imageModel || input.config.model).trim();
+    const resolved = input.config.channelId ? input.config : resolveModelRequestConfig(input.config, selected);
+    const context: ImageTaskContext = {
+        apiMode: resolved.apiMode, model: resolved.model, group: resolved.group,
+        channelId: resolved.channelId || "", baseUrl: resolved.baseUrl, kind: input.kind,
+    };
+    const task = extractAcceptedImageTask(input.submittedPayload, context);
+    await notifyAcceptedImageTask(input.submittedPayload, context, input.onAccepted);
+    return input.poll({ taskId: task.taskId, timeoutMs: input.pollTimeoutMs, signal: new AbortController().signal });
+}
+
+async function pollImageTask(input: {
+    taskId: string;
+    timeoutMs: number;
+    transport: (input: { taskId: string; timeoutMs: number; signal: AbortSignal }) => unknown | Promise<unknown>;
+    setTimer: (callback: () => void, delayMs: number) => unknown;
+    clearTimer: (timer: unknown) => void;
+}) {
+    if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new ImageRequestError("图片任务轮询超时配置无效");
+    const controller = new AbortController();
+    let rejectTimeout!: (error: Error) => void;
+    const timeout = new Promise<never>((_resolve, reject) => { rejectTimeout = reject; });
+    const timer = input.setTimer(() => {
+        controller.abort();
+        rejectTimeout(new ImageRequestError("图片任务轮询超时"));
+    }, input.timeoutMs);
+    try {
+        return await Promise.race([input.transport({ taskId: input.taskId, timeoutMs: input.timeoutMs, signal: controller.signal }), timeout]);
+    } finally {
+        input.clearTimer(timer);
+    }
+}
+
+function delay(ms: number, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+    });
+}
+
+const IMAGE_POLL_REQUEST_TIMEOUT_MS = 30_000;
+function combinedAbortSignal(timeoutSignal: AbortSignal, callerSignal?: AbortSignal) {
+    if (!callerSignal) return timeoutSignal;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (timeoutSignal.aborted || callerSignal.aborted) abort();
+    else {
+        timeoutSignal.addEventListener("abort", abort, { once: true });
+        callerSignal.addEventListener("abort", abort, { once: true });
+    }
+    return controller.signal;
+}
+async function pollSubmittedImageTask(
+    config: AiConfig,
+    kind: "generation" | "edit",
+    input: { taskId: string; timeoutMs: number; signal: AbortSignal },
+    options?: RequestOptions,
+) {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+        const response = await pollImageTask({
+            taskId: input.taskId, timeoutMs: input.timeoutMs,
+            transport: ({ signal, timeoutMs }) => axios.get<unknown>(
+                aiApiUrl(config, buildImageTaskStatusPath(config.apiMode, kind, input.taskId)),
+                aiRequestOptions(config, { signal: combinedAbortSignal(signal, combinedAbortSignal(input.signal, options?.signal)), timeout: timeoutMs }),
+            ),
+            setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+            clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+        }) as { data: unknown };
+        const task = unwrapImageTaskStatus(response.data);
+        const state = classifyImageTaskStatus(task.status, config.apiMode);
+        if (state === "success") return parseCompletedImageTask(response.data);
+        if (state === "failure") throw upstreamImageTaskError(task, "图片生成失败");
+        if (attempt === 119) break;
+        const retryAfter = Number(task.retry_after);
+        await delay(
+            Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(5000, Math.max(250, retryAfter * 1000)) : 1500,
+            combinedAbortSignal(input.signal, options?.signal),
+        );
+    }
+    throw new ImageRequestError("图片生成超时，请稍后重试");
+}
+async function resolveImageSubmission(config: AiConfig, kind: "generation" | "edit", payload: ImageApiResponse, options?: RequestOptions) {
+    const envelope = successfulEnvelope(payload, "图片请求失败");
+    if (!("task_id" in envelope) && !("id" in envelope)) return parseImagePayload(envelope as ImageApiResponse);
+    return resolveSubmittedImageTask({
+        submittedPayload: payload, config, kind, onAccepted: options?.onTaskAccepted || (() => undefined),
+        pollTimeoutMs: IMAGE_POLL_REQUEST_TIMEOUT_MS,
+        poll: (input) => pollSubmittedImageTask(config, kind, input, options),
+    });
+}
+
+type RecoveryResolverInput = {
+    config: AiConfig;
+    taskId: string;
+    contentIndex: number;
+    resolveStatus: (input: { config: AiConfig; taskId: string }) => unknown | Promise<unknown>;
+    resolveContent: (input: { config: AiConfig; contentUrl: string }) => Promise<{ status: number; contentType: string | null; blob: Blob }>;
+};
+async function recoverImageTaskWithResolvers(input: RecoveryResolverInput) {
+    if (input.config.apiMode !== "newapi") throw new ImageRequestError("仅 New API 图片任务支持恢复");
+    normalizedProvenanceBaseUrl(input.config.baseUrl);
+    const payload = await input.resolveStatus({ config: input.config, taskId: input.taskId });
+    const status = unwrapImageTaskStatus(payload);
+    const state = classifyImageTaskStatus(status.status, "newapi");
+    if (state === "pending") throw new ImageRequestError("图片任务尚未完成，请稍后重试");
+    if (state === "failure") throw upstreamImageTaskError(status, "图片生成失败");
+    const result = isRecord(status.result) ? status.result : undefined;
+    const resultData = Array.isArray(result?.data) ? result.data : [];
+    const serverUrl = resultData.map((item) => isRecord(item) ? resolveImageDataUrl(item) : null).find(Boolean);
+    const contentUrl = typeof status.content_url === "string" && status.content_url.trim()
+        ? status.content_url : serverUrl || buildImageTaskContentPath(input.taskId, input.contentIndex);
+    buildImageContentFetchRequest(input.config, contentUrl);
+    return validateImageTaskContent(await input.resolveContent({ config: input.config, contentUrl }));
+}
+
+export async function recoverImageTask(
+    config: AiConfig,
+    task: Pick<ImageTaskAcceptance, "taskId" | "contentIndex" | "apiMode" | "model" | "group" | "channelId" | "baseUrl" | "recoverable">,
+    options?: Pick<RequestOptions, "signal">,
+) {
+    if (!task.recoverable || task.apiMode !== "newapi") throw new ImageRequestError("该图片任务不可恢复");
+    const channel = config.channels.find((item) => item.id === task.channelId);
+    if (!channel) throw new ImageRequestError("图片任务原渠道已不存在，无法安全恢复凭据");
+    const requestConfig: AiConfig = {
+        ...config,
+        channelId: task.channelId,
+        apiMode: "newapi",
+        apiFormat: "openai",
+        baseUrl: normalizedProvenanceBaseUrl(task.baseUrl),
+        apiKey: channel.apiKey,
+        model: task.model,
+        imageModel: task.model,
+        group: task.group,
+    };
+    try {
+        return await recoverImageTaskWithResolvers({
+            config: requestConfig, taskId: task.taskId, contentIndex: task.contentIndex,
+            resolveStatus: async ({ config: used, taskId }) => (await axios.get<unknown>(
+                aiApiUrl(used, buildImageTaskStatusPath("newapi", "generation", taskId)),
+                aiRequestOptions(used, { signal: options?.signal, timeout: IMAGE_POLL_REQUEST_TIMEOUT_MS }),
+            )).data,
+            resolveContent: async ({ config: used, contentUrl }) => {
+                return fetchImageTaskContent({
+                    config: used, contentUrl, signal: options?.signal, timeoutMs: IMAGE_POLL_REQUEST_TIMEOUT_MS, fetcher: fetch,
+                    setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+                    clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+                });
+            },
+        });
+    } catch (error) {
+        if (error instanceof ImageRequestError) throw error;
+        throw new ImageRequestError(readAxiosError(error, "重新获取图片失败"));
+    }
 }
 
 function readAxiosError(error: unknown, fallback: string) {
@@ -765,10 +1088,12 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 ...aiRequestOptions(requestConfig, { headers: { "Content-Type": "application/json" }, signal: options?.signal }),
             },
         );
-        const images = parseImagePayload(response.data);
+        const images = await resolveImageSubmission(requestConfig, "generation", response.data, options);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        if (error instanceof ImageRequestError) throw error;
+        if (axios.isAxiosError(error)) throw upstreamImageTaskError(error.response?.data, readAxiosError(error, "请求失败"));
+        throw new ImageRequestError(readAxiosError(error, "请求失败"));
     }
 }
 
@@ -816,10 +1141,12 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 
     try {
         const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, aiRequestOptions(requestConfig, { signal: options?.signal }));
-        const images = parseImagePayload(response.data);
+        const images = await resolveImageSubmission(requestConfig, "edit", response.data, options);
         return images;
     } catch (error) {
-        throw new Error(readAxiosError(error, "请求失败"));
+        if (error instanceof ImageRequestError) throw error;
+        if (axios.isAxiosError(error)) throw upstreamImageTaskError(error.response?.data, readAxiosError(error, "请求失败"));
+        throw new ImageRequestError(readAxiosError(error, "请求失败"));
     }
 }
 
@@ -904,4 +1231,10 @@ const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "
     systemPrompt: "",
 };
 
-export const __test__ = { buildGenerationRequestBody, buildEditFormData, normalizeDiscoveredModelNames };
+export const __test__ = {
+    buildGenerationRequestBody, buildEditFormData, normalizeDiscoveredModelNames,
+    extractAcceptedImageTask, notifyAcceptedImageTask, classifyImageTaskStatus, unwrapImageTaskStatus,
+    parseCompletedImageTask, buildImageTaskStatusPath, buildImageTaskContentPath,
+    validateImageTaskContent, upstreamImageTaskError, buildImageContentFetchRequest, resolveSubmittedImageTask, resolveImageSubmission,
+    fetchImageTaskContent, pollImageTask, recoverImageTask: recoverImageTaskWithResolvers,
+};
