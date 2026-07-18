@@ -41,7 +41,20 @@ function recoveryHarness(overrides: Record<string, unknown> = {}) {
     const original = current;
     const events: string[] = [];
     const action = createCanvasImageRecoveryAction({
-        recoverImageTask: async (task) => { events.push("recover"); expect(task).toEqual(taskMetadata); return new Blob(["png"], { type: "image/png" }); },
+        recoverImageTask: async (task) => {
+            events.push("recover");
+            expect(task).toEqual({
+                taskId: taskMetadata.taskId,
+                contentIndex: taskMetadata.taskContentIndex,
+                recoverable: taskMetadata.taskRecoverable,
+                apiMode: taskMetadata.taskApiMode,
+                model: taskMetadata.taskModel,
+                group: taskMetadata.taskGroup,
+                channelId: taskMetadata.taskChannelId,
+                baseUrl: taskMetadata.taskBaseUrl,
+            });
+            return new Blob(["png"], { type: "image/png" });
+        },
         uploadImage: async () => { events.push("upload"); return { url: "blob:preview", storageKey: "image:durable", width: 640, height: 480 }; },
         updateNode: (id, updater) => { events.push(`update:${id}`); current = updater(current); },
         flushCanvasStorePersistence: async () => { events.push("flush"); },
