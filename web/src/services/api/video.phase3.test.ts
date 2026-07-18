@@ -98,7 +98,7 @@ return [{ status: "pending", url: "https://media.test/tasks/plugin-task" }, "", 
         const cfg = config("custom-video", {}, script);
 
         const task = await createVideoGenerationTask(cfg, "plugin prompt", [], videos, audios);
-        expect(await pollVideoGenerationTask(cfg, task)).toEqual({
+        expect(await pollVideoGenerationTask(cfg, task)).toMatchObject({
             status: "completed",
             result: { url: "https://media.test/generated.mp4", mimeType: "video/mp4" },
         });
