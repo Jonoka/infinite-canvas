@@ -67,6 +67,7 @@ describe("Canvas frozen video retry plan", () => {
             prompt: "saved prompt",
             config: {
                 model: "saved-model",
+                videoModel: "saved-model",
                 size: "16:9",
                 videoSeconds: "10",
                 vquality: "1080p",
