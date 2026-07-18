@@ -53,7 +53,10 @@ export function createCanvasImageRecoveryAction(dependencies: {
             error: new DOMException(controller.signal.aborted ? "Aborted" : "Stale", "AbortError"),
         });
         if (!current()) return stale();
-        dependencies.updateNode(node.id, (value) => ({ ...value, metadata: { ...value.metadata, status: "loading", errorDetails: undefined } }));
+        dependencies.updateNode(node.id, (value) => {
+            const { errorDetails: _staleError, ...metadata } = value.metadata || {};
+            return { ...value, metadata: { ...metadata, status: "loading" } };
+        });
         let blob: Blob;
         try {
             blob = await dependencies.recoverImageTask(recoveryTask(node), controller.signal);

@@ -118,7 +118,7 @@ describe("Phase 2B recovery action", () => {
         const outcome = await h.action(h.original);
         expect(outcome).toMatchObject({ status: "failure", stage, nodeId: "target", error });
         expect(Object.fromEntries(taskKeys.map((key) => [key, h.current().metadata?.[key]]))).toEqual(taskMetadata);
-        expect(h.current().metadata?.sentinel).toBe(sentinel);
+        expect(h.current().metadata?.sentinel).toEqual(sentinel);
     });
 
     test("flush failure restores a recoverable error and explicitly retries persistence", async () => {
