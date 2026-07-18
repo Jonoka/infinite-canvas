@@ -23,6 +23,7 @@ describe("Canvas video retry commit wiring", () => {
     test("normal video generation guards node creation, connection, storage, and final node write", async () => {
         const source = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
         const videoBranch = section(source, 'if (mode === "video") {', 'if (mode === "audio") {');
+        expect(videoBranch).toContain("isEmptyVideoNode ? runController : startGenerationRequest");
         expect(videoBranch.match(/if \(!isCurrentRun\(\)\) return;/g)?.length).toBeGreaterThanOrEqual(4);
         expect(videoBranch).toContain("const video = await storeGeneratedVideo");
     });

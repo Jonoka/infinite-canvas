@@ -2393,7 +2393,7 @@ function InfiniteCanvasPage() {
                         },
                     };
                     pendingChildIds = [videoId];
-                    const controller = startGenerationRequest(videoId, nodeId, nodeId, runController);
+                    const controller = isEmptyVideoNode ? runController : startGenerationRequest(videoId, nodeId, nodeId, runController);
                     if (!isCurrentRun()) return;
                     setNodes((prev) =>
                         isEmptyVideoNode
