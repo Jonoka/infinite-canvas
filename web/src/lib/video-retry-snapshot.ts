@@ -1,9 +1,17 @@
-export type VideoRetrySnapshot<TPrompt = string, TConfig = Record<string, unknown>, TReference = unknown> = {
+export type VideoRetrySnapshot<TPrompt = string, TConfig = Record<string, unknown>, TReference = unknown, TVideoReference = TReference, TAudioReference = TReference> = {
     prompt: TPrompt;
     config: TConfig;
     references: TReference[];
-    videoReferences: TReference[];
-    audioReferences: TReference[];
+    videoReferences: TVideoReference[];
+    audioReferences: TAudioReference[];
+};
+
+export type VideoRetryRequestSnapshot<TConfig = Record<string, unknown>, TReference = unknown, TVideoReference = TReference, TAudioReference = TReference> = {
+    text: string;
+    config: TConfig;
+    references: TReference[];
+    videoReferences: TVideoReference[];
+    audioReferences: TAudioReference[];
 };
 
 export function freezeVideoRetrySnapshot<T extends { config: unknown; references?: unknown[]; videoReferences?: unknown[]; audioReferences?: unknown[] } & ({ prompt: unknown } | { text: unknown })>(input: T): T {
@@ -16,6 +24,8 @@ export function freezeVideoRetrySnapshot<T extends { config: unknown; references
     return clone({ ...input, references: input.references || [], videoReferences: input.videoReferences || [], audioReferences: input.audioReferences || [] }) as T;
 }
 
-export function selectVideoLogRetrySnapshot(log: { prompt: string; config: Record<string, unknown>; references?: unknown[]; videoReferences?: unknown[]; audioReferences?: unknown[] }) {
+export function selectVideoLogRetrySnapshot<TReference, TVideoReference, TAudioReference>(
+    log: { prompt: string; config: Record<string, unknown>; references?: TReference[]; videoReferences?: TVideoReference[]; audioReferences?: TAudioReference[] },
+): VideoRetryRequestSnapshot<Record<string, unknown>, TReference, TVideoReference, TAudioReference> {
     return freezeVideoRetrySnapshot({ text: log.prompt, config: log.config, references: log.references || [], videoReferences: log.videoReferences || [], audioReferences: log.audioReferences || [] });
 }

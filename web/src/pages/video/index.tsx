@@ -231,7 +231,7 @@ export default function VideoPage() {
     };
 
     const retryResult = () => {
-        const historical = previewLog ? selectVideoLogRetrySnapshot(previewLog) : null;
+        const historical = previewLog ? selectVideoLogRetrySnapshot<ReferenceImage, ReferenceVideo, ReferenceAudio>(previewLog) : null;
         const snapshot = historical ? { ...historical, config: buildVideoConfig({ ...effectiveConfig, ...historical.config }, String(historical.config.videoModel || previewLog?.model || model)) } : retrySnapshotRef.current;
         if (snapshot) {
             setPrompt(snapshot.text);
