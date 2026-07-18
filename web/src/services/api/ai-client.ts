@@ -26,13 +26,13 @@ export function normalizeHeaders(headers: AxiosRequestConfig["headers"] | Header
     if (headers instanceof Headers) return Object.fromEntries(headers.entries());
     if (typeof (headers as { forEach?: unknown }).forEach === "function") {
         const result: Record<string, string> = {};
-        (headers as Headers).forEach((value, key) => { result[key] = value; });
+        (headers as unknown as Headers).forEach((value, key) => { result[key] = value; });
         return result;
     }
     if (typeof (headers as { toJSON?: () => Record<string, unknown> }).toJSON === "function") {
         return Object.fromEntries(Object.entries((headers as { toJSON: () => Record<string, unknown> }).toJSON()).map(([key, value]) => [key, String(value)]));
     }
-    return Object.fromEntries(Object.entries(headers as Record<string, string | number | boolean>).map(([key, value]) => [key, String(value)]));
+    return Object.fromEntries(Object.entries(headers as unknown as Record<string, string | number | boolean>).map(([key, value]) => [key, String(value)]));
 }
 
 function withoutAuthorization(headers: AxiosRequestConfig["headers"] | HeadersInit | undefined) {

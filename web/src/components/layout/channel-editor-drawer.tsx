@@ -124,7 +124,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                             </span>
                             <div className="flex shrink-0 items-center gap-2">
                                 <Segmented size="small" value={model.capability} options={capabilityOptions} onChange={(value) => setCapability(model.name, value as ModelCapability)} />
-                                <Button size="small" type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
+                                <Button size="small" type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability || "text", value: model.script || "" })}>
                                     {model.script ? "脚本已设" : "调用脚本"}
                                 </Button>
                                 <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={() => removeModel(model.name)} />

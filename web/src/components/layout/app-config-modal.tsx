@@ -7,7 +7,7 @@ import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
-import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { createModelChannel, encodeChannelModel, modelOptionsFromChannels, normalizeModelOptionValue, resolveModelRequestConfig, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { assertAiConfig } from "@/services/api/ai-client";
 
 type ModelGroup = {
@@ -75,7 +75,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const finishConfig = () => {
         const ready = config.channels.some((channel) => channel.models.some((model) => {
             try {
-                assertAiConfig({ ...config, ...channel, model: model.name }, model.name, "AI");
+                const resolved = resolveModelRequestConfig(config, encodeChannelModel(channel.id, model.name));
+                assertAiConfig(resolved, resolved.model, "AI");
                 return true;
             } catch {
                 return false;
