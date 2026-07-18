@@ -169,9 +169,11 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
-        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
-
-        const result = await Promise.allSettled(tasks);
+        const prompts = Array.from({ length: generationCount }, () => snapshot.text);
+        const initialResults = await Promise.allSettled(Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot)));
+        const result = await createImageWorkbenchActions({
+            request: (_prompt, requestConfig, index = 0) => runGenerationSlot(index, { ...snapshot, config: requestConfig }),
+        }).generateBatch(snapshot.config, prompts, initialResults);
         const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
         const successCount = successImages.length;
         const failCount = generationCount - successCount;
@@ -330,7 +332,13 @@ export default function ImagePage() {
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
         const retryStartedAt = performance.now();
         try {
-            const image = await runGenerationSlot(index, snapshot);
+            const initial = await runGenerationSlot(index, snapshot)
+                .then((value) => ({ status: "fulfilled", value }) as PromiseFulfilledResult<GeneratedImage>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
+            const outcome = await createImageWorkbenchActions({
+                request: (_prompt, requestConfig) => runGenerationSlot(index, { ...snapshot, config: requestConfig }),
+            }).retrySlot(snapshot.config, snapshot.text, initial);
+            if (outcome.status === "rejected") throw outcome.reason;
+            const image = outcome.value;
             const stored = await uploadImage(image.dataUrl);
             const logImage = { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { image: { ...image, dataUrl: stored.url, storageKey: stored.storageKey } }));

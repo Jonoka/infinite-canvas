@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { assertModelCapability, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { assertModelCapability, encodeChannelModel, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { aiApiUrl, aiFetchOptions, aiRequestOptions, assertAiConfig } from "./ai-client";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
@@ -347,7 +347,7 @@ export const imageRequestErrorFromPayload = upstreamImageTaskError;
 
 function resolveImageRequestConfig(config: AiConfig, override: Partial<Pick<AiConfig, "model" | "group" | "quality" | "size" | "count">> = {}) {
     const selected = (config.imageModel || config.model).trim();
-    const resolved = resolveModelRequestConfig(config, selected);
+    const resolved = config.channelId ? config : resolveModelRequestConfig(config, selected);
     return { ...resolved, ...override, model: override.model || resolved.model, imageModel: override.model || resolved.model };
 }
 
@@ -1074,11 +1074,12 @@ function buildEditFormData(config: AiConfig, prompt: string) {
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<ImageResult[]> {
     const selectedModel = (config.imageModel || config.model).trim();
-    assertModelCapability(config, selectedModel, "image", "图像");
-    const requestConfig = resolveImageRequestConfig(config, { group: config.group, quality: config.quality, size: config.size, count: config.count });
+    const selectedRequestModel = config.channelId ? encodeChannelModel(config.channelId, selectedModel) : selectedModel;
+    assertModelCapability(config, selectedRequestModel, "image", "图像");
+    const requestConfig = resolveImageRequestConfig(config, { quality: config.quality, size: config.size, count: config.count });
     assertAiConfig(requestConfig, requestConfig.model, "图像");
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
-    const script = resolveModelScript(config, selectedModel);
+    const script = resolveModelScript(config, selectedRequestModel);
     if (script) {
         // Model plugins are authoritative: pass generic normalized inputs, not standard OpenAI model-specific rewrites.
         const quality = normalizeQuality(config.quality);
@@ -1125,12 +1126,13 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions): Promise<ImageResult[]> {
     const selectedModel = (config.imageModel || config.model).trim();
-    assertModelCapability(config, selectedModel, "image", "图像");
-    const requestConfig = resolveImageRequestConfig(config, { group: config.group, quality: config.quality, size: config.size, count: config.count });
+    const selectedRequestModel = config.channelId ? encodeChannelModel(config.channelId, selectedModel) : selectedModel;
+    assertModelCapability(config, selectedRequestModel, "image", "图像");
+    const requestConfig = resolveImageRequestConfig(config, { quality: config.quality, size: config.size, count: config.count });
     assertAiConfig(requestConfig, requestConfig.model, "图像");
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
-    const script = resolveModelScript(config, selectedModel);
+    const script = resolveModelScript(config, selectedRequestModel);
     if (script) {
         // Model plugins are authoritative: pass generic normalized inputs, not standard OpenAI model-specific rewrites.
         const quality = normalizeQuality(config.quality);
