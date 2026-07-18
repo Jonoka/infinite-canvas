@@ -1,0 +1,20 @@
+name: infinite-canvas-v09-preview
+
+services:
+  app:
+    image: ghcr.io/jonoka/infinite-canvas:preview-e3eea38f3beceb9076207cb1c525b9a904c13e11
+    container_name: infinite-canvas-v09-preview
+    ports:
+      - "127.0.0.1:3020:3000"
+    restart: unless-stopped
+    environment:
+      ANALYTICS_GA4_ID: ""
+      ANALYTICS_BAIDU_ID: ""
+    volumes:
+      - ./preview-data:/app/data
+    networks:
+      - infinite-canvas-v09-preview
+
+networks:
+  infinite-canvas-v09-preview:
+    name: infinite-canvas-v09-preview
