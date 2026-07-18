@@ -85,8 +85,8 @@ export async function hydrateAssistantImages(sessions: CanvasAssistantSession[])
     );
 }
 
-export function buildCanvasVideoRetryPlan(input: { currentConfig: Record<string, unknown>; metadata: { prompt: string; model: string; size: string; seconds: string; vquality: string; generateAudio: string; watermark: string; videoReferences: Array<{ kind: "image" | "video" | "audio"; url: string; role?: string; component?: string }> } }) {
-    const config = { ...input.currentConfig, model: input.metadata.model, size: input.metadata.size, videoSeconds: input.metadata.seconds, vquality: input.metadata.vquality, videoGenerateAudio: input.metadata.generateAudio, videoWatermark: input.metadata.watermark };
+export function buildCanvasVideoRetryPlan(input: { currentConfig: AiConfig; metadata: { prompt: string; model: string; size: string; seconds: string; vquality: string; generateAudio: string; watermark: string; videoReferences: Array<{ kind: "image" | "video" | "audio"; url: string; role?: string; component?: string }> } }) {
+    const config = { ...input.currentConfig, model: input.metadata.model, videoModel: input.metadata.model, size: input.metadata.size, videoSeconds: input.metadata.seconds, vquality: input.metadata.vquality, videoGenerateAudio: input.metadata.generateAudio, videoWatermark: input.metadata.watermark };
     const refs = input.metadata.videoReferences;
     const mapRef = (item: (typeof refs)[number], urlKey: "dataUrl" | "url") => ({ [urlKey]: item.url, ...(item.url.startsWith(`${item.kind}:`) ? { storageKey: item.url } : {}), ...(item.role ? { role: item.role } : {}), ...(item.component ? { component: item.component } : {}), order: refs.indexOf(item) });
     return { prompt: input.metadata.prompt, config, references: refs.filter((item) => item.kind === "image").map((item) => mapRef(item, "dataUrl")), videoReferences: refs.filter((item) => item.kind === "video").map((item) => mapRef(item, "url")), audioReferences: refs.filter((item) => item.kind === "audio").map((item) => mapRef(item, "url")) };

@@ -44,10 +44,17 @@ function pluginUrl(config: AiConfig, path: string) {
     return aiApiUrl(config, path.startsWith("/") ? path : `/${path}`);
 }
 
+function pluginRequestOptions(config: AiConfig, path: string, options: AxiosRequestConfig): AxiosRequestConfig {
+    const request = aiRequestOptions(config, options);
+    if (!/^https?:/i.test(path) || new URL(path).origin === new URL(config.baseUrl).origin) return request;
+    request.headers = Object.fromEntries(Object.entries(request.headers || {}).filter(([name]) => name.toLowerCase() !== "authorization"));
+    return request;
+}
+
 function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHttp {
     const run = async (method: "get" | "post", path: string, body: unknown, opts?: PluginHttpOptions) => {
         const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-        const response = await axios.request(aiRequestOptions(config, {
+        const response = await axios.request(pluginRequestOptions(config, path, {
             method,
             url: pluginUrl(config, path),
             data: method === "post" ? body : undefined,
@@ -68,7 +75,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
 /** Raw request with no automatic auth header — the script controls method, url, headers, body entirely. */
 function createPluginRequest(config: AiConfig, options?: RequestOptions) {
     return async (requestConfig: AxiosRequestConfig & { url: string }) => {
-        const response = await axios.request(aiRequestOptions(config, { ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal }));
+        const response = await axios.request(pluginRequestOptions(config, requestConfig.url, { ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal }));
         return response.data;
     };
 }

@@ -57,6 +57,7 @@ import {
     audioExtension,
     buildAngleLabel,
     buildAnglePrompt,
+    buildCanvasVideoRetryPlan,
     buildGenerationConfig,
     findRetrySourceNode,
     generationReferenceUrls,
@@ -1635,7 +1636,7 @@ function InfiniteCanvasPage() {
                 message.success("已加入我的资产");
                 return;
             }
-            if (node.type === CanvasNodeType.Video) {
+            if (CanvasNodeType.Video === node.type) {
                 if (!node.metadata?.content) return message.error("没有可保存的视频");
                 addAsset({
                     kind: "video",
@@ -2580,6 +2581,21 @@ function InfiniteCanvasPage() {
             const savedImageMetadata = node.type === CanvasNodeType.Image ? { ...batchRoot?.metadata, ...node.metadata } : undefined;
             const savedVideoMetadata = node.type === CanvasNodeType.Video ? node.metadata : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
+            const videoRetryPlan = savedVideoMetadata
+                ? buildCanvasVideoRetryPlan({
+                      currentConfig: effectiveConfig,
+                      metadata: {
+                          prompt: savedVideoMetadata.prompt || "",
+                          model: savedVideoMetadata.model || effectiveConfig.videoModel || effectiveConfig.model,
+                          size: savedVideoMetadata.size || effectiveConfig.size,
+                          seconds: savedVideoMetadata.seconds || effectiveConfig.videoSeconds,
+                          vquality: savedVideoMetadata.vquality || effectiveConfig.vquality,
+                          generateAudio: savedVideoMetadata.generateAudio || effectiveConfig.videoGenerateAudio,
+                          watermark: savedVideoMetadata.watermark || effectiveConfig.videoWatermark,
+                          videoReferences: savedVideoMetadata.videoReferences || [],
+                      },
+                  })
+                : null;
             const generationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
@@ -2590,14 +2606,16 @@ function InfiniteCanvasPage() {
                           background: savedImageMetadata.background ?? effectiveConfig.background,
                           count: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
+                    : videoRetryPlan
+                      ? { ...videoRetryPlan.config, count: "1" }
+                      : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
                 return;
             }
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
-            const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
+            const prompt = (savedImageMetadata?.prompt || videoRetryPlan?.prompt || context?.prompt || "").trim();
             if (!prompt) {
                 message.warning("找不到提示词，无法重试");
                 return;
@@ -2611,22 +2629,24 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: "参考图片已丢失，无法继续重试" } } : item)));
                 return;
             }
-            const retryImages = retryReferenceImages || [];
-    const savedVideoReferences = (savedVideoMetadata?.videoReferences || []).filter((reference) => reference.kind === "video").map((reference) => ({
+            const retryImages = videoRetryPlan
+                ? videoRetryPlan.references.map((reference, index) => ({ ...reference, id: `retry-image-${index}`, name: "reference.png", type: "image/png" }))
+                : retryReferenceImages || [];
+            const savedVideoReferences = (videoRetryPlan?.videoReferences || []).map((reference) => ({
                         id: `retry-${reference.url}`,
                         name: "reference.mp4",
                         type: "video/mp4",
                         url: reference.url,
-                        storageKey: reference.url.includes(":") ? reference.url : undefined,
+                        storageKey: reference.storageKey,
                         role: reference.role,
                         component: reference.component,
                     }));
-            const savedAudioReferences = (savedVideoMetadata?.videoReferences || []).filter((reference) => reference.kind === "audio").map((reference) => ({
+            const savedAudioReferences = (videoRetryPlan?.audioReferences || []).map((reference) => ({
                 id: `retry-${reference.url}`,
                 name: "reference.mp3",
                 type: "audio/mpeg",
                 url: reference.url,
-                storageKey: reference.url.includes(":") ? reference.url : undefined,
+                storageKey: reference.storageKey,
                 role: reference.role,
                 component: reference.component,
             }));
@@ -2654,30 +2674,36 @@ function InfiniteCanvasPage() {
                 }
                 if (node.type === CanvasNodeType.Video) {
                     const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, savedVideoReferences, savedAudioReferences, { signal: controller.signal }));
-                    const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-                    setNodes((prev) =>
-                        prev.map((item) =>
-                            item.id === node.id
-                                ? {
-                                      ...item,
-                                      width: videoSize.width,
-                                      height: videoSize.height,
-                                      position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
-                                      metadata: {
-                                          ...item.metadata,
-                                          ...videoMetadata(video),
-                                          prompt,
-                                          model: generationConfig.model,
-                                          size: generationConfig.size,
-                                          seconds: generationConfig.videoSeconds,
-                                          vquality: generationConfig.vquality,
-                                          generateAudio: generationConfig.videoGenerateAudio,
-                                          watermark: generationConfig.videoWatermark,
-                                      },
-                                  }
-                                : item,
-                        ),
-                    );
+                    commitCanvasVideoResultIfCurrent({
+                        isCurrentRequest,
+                        result: video,
+                        commit: (currentVideo) => {
+                            const videoSize = fitNodeSize(currentVideo.width || node.width, currentVideo.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                            setNodes((prev) =>
+                                prev.map((item) =>
+                                    item.id === node.id
+                                        ? {
+                                              ...item,
+                                              width: videoSize.width,
+                                              height: videoSize.height,
+                                              position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
+                                              metadata: {
+                                                  ...item.metadata,
+                                                  ...videoMetadata(currentVideo),
+                                                  prompt,
+                                                  model: generationConfig.model,
+                                                  size: generationConfig.size,
+                                                  seconds: generationConfig.videoSeconds,
+                                                  vquality: generationConfig.vquality,
+                                                  generateAudio: generationConfig.videoGenerateAudio,
+                                                  watermark: generationConfig.videoWatermark,
+                                              },
+                                          }
+                                        : item,
+                                ),
+                            );
+                        },
+                    });
                     return;
                 }
                 if (node.type === CanvasNodeType.Audio) {
