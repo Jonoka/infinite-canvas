@@ -92,7 +92,7 @@ describe("Phase 3 video protocol", () => {
 if (images.length !== 0 || videos[0].url !== "https://media.test/ref.mp4" || audios[0].url !== "https://media.test/ref.mp3") {
   throw new Error("video references were not passed through");
 }
-return [{ status: "pending" }, { video_url: "https://media.test/generated.mp4" }];`;
+return [{ status: "pending", url: "https://media.test/tasks/plugin-task" }, "", { video_url: "https://media.test/generated.mp4" }];`;
         const videos: ReferenceVideo[] = [{ id: "video", name: "ref.mp4", type: "video/mp4", url: "https://media.test/ref.mp4", durationMs: 3000 }];
         const audios: ReferenceAudio[] = [{ id: "audio", name: "ref.mp3", type: "audio/mpeg", url: "https://media.test/ref.mp3", durationMs: 3000 }];
         const cfg = config("custom-video", {}, script);
