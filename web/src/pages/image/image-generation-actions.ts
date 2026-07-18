@@ -16,6 +16,7 @@ function applyFallback(config: AiConfig, fallback: RequestFallback) {
     return applyLiteToProRequestOverride(config, {
         quality: "low", size: config.size, switchesToAuto: fallback.group === "auto" && config.group !== "auto", cost: null,
         ...fallback,
+        count: 1,
     } as LiteToProFallback);
 }
 
