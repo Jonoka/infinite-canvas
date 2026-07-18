@@ -54,7 +54,7 @@ return "done";
         }) as typeof axios.request;
         await runModelPlugin({ capability: "video", config: config(), script: `
 await http.get("https://uploads.third-party.test/jobs/cross-origin", { headers: {
-    api_key: "a", apikey: "b", x-apikey: "c", x_api_key: "d", "x-goog-api-key": "e",
+    api_key: "a", apikey: "b", "x-apikey": "c", x_api_key: "d", "x-goog-api-key": "e",
     Authorization: "f", "proxy-authorization": "g", "x-request-id": "keep"
 } }); return "done";` });
         const crossOriginHeaders = headers(requests[0].headers);
