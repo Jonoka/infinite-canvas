@@ -37,11 +37,17 @@ const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
 type PersistedCanvasState = Pick<CanvasStore, "projects">;
 let queuedPersistState: PersistedCanvasState | null = null;
 
+export type DurableCanvasPersistence<T> = {
+    write: (snapshot: T) => Promise<void>;
+    enqueue: (snapshot: T) => void;
+    flush: () => Promise<void>;
+};
+
 export function createDurableCanvasPersistence<T>(options: {
     schedule: (callback: () => void) => unknown;
     cancel: (handle: unknown) => void;
     write: (snapshot: T) => Promise<void>;
-}) {
+}): DurableCanvasPersistence<T> {
     let timer: unknown;
     const queued: T[] = [];
     let active: Promise<void> | undefined;
@@ -94,21 +100,30 @@ function durableCanvasValue(value: StorageValue<CanvasStore>) {
     return copy;
 }
 
-const durableQueue = createDurableCanvasPersistence<CanvasStorageSnapshot>({
-    schedule: (callback) => setTimeout(callback, 400),
-    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-    write: async (snapshot) => canvasStorePersistence.write(snapshot.name, durableCanvasValue(snapshot.value)),
-});
+type CanvasStorePersistence = {
+    write: (name: string, value: StorageValue<CanvasStore>) => Promise<void>;
+    read: (name: string) => Promise<StorageValue<CanvasStore> | null>;
+    enqueue: (snapshot: CanvasStorageSnapshot) => void;
+    flush: () => Promise<void>;
+};
 
-export const canvasStorePersistence = {
-    write: async (name: string, value: StorageValue<CanvasStore>) => localForageStorage.setItem(name, JSON.stringify(value)),
-    read: async (name: string) => {
+export const canvasStorePersistence: CanvasStorePersistence = {
+    write: async (name: string, value: StorageValue<CanvasStore>): Promise<void> => localForageStorage.setItem(name, JSON.stringify(value)),
+    read: async (name: string): Promise<StorageValue<CanvasStore> | null> => {
         const value = await localForageStorage.getItem(name);
         return value ? JSON.parse(value) as StorageValue<CanvasStore> : null;
     },
-    enqueue: durableQueue.enqueue,
-    flush: durableQueue.flush,
+    enqueue: () => { throw new Error("canvas persistence queue is not initialized"); },
+    flush: async () => { throw new Error("canvas persistence queue is not initialized"); },
 };
+
+const durableQueue: DurableCanvasPersistence<CanvasStorageSnapshot> = createDurableCanvasPersistence<CanvasStorageSnapshot>({
+    schedule: (callback) => setTimeout(callback, 400),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    write: async (snapshot): Promise<void> => canvasStorePersistence.write(snapshot.name, durableCanvasValue(snapshot.value)),
+});
+canvasStorePersistence.enqueue = durableQueue.enqueue;
+canvasStorePersistence.flush = durableQueue.flush;
 
 export const flushCanvasStorePersistence = () => canvasStorePersistence.flush();
 
