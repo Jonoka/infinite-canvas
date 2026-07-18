@@ -2687,7 +2687,7 @@ function InfiniteCanvasPage() {
                         isCurrentRequest,
                         result: video,
                         commit: (currentVideo) => {
-                            if (!isCurrentRun()) return;
+                            if (!isCurrentRequest()) return;
                             const videoSize = fitNodeSize(currentVideo.width || node.width, currentVideo.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                             setNodes((prev) =>
                                 prev.map((item) =>
