@@ -5,6 +5,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
+import { preserveVideoGenerationResult } from "@/lib/video-generation-contracts";
 import { assertModelCapability, modelOptionName, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import { aiApiUrl, aiRequestOptions, assertAiConfig } from "./ai-client";
 import { runModelPlugin } from "./model-plugin";
@@ -152,13 +153,13 @@ function hasPendingVideoPluginResult(value: unknown, seen: Set<object>): boolean
         || Object.entries(object).some(([key, item]) => key !== "status" && hasPendingVideoPluginResult(item, seen));
 }
 
-export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
-    if (result.blob) return uploadMediaFile(result.blob, "video");
+export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile & { urls?: string[] }> {
+    if (result.blob) return preserveVideoGenerationResult(result, await uploadMediaFile(result.blob, "video"));
     if (result.url) {
         try {
-            return await uploadMediaFile(result.url, "video");
+            return preserveVideoGenerationResult(result, await uploadMediaFile(result.url, "video"));
         } catch {
-            return { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
+            return preserveVideoGenerationResult(result, { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" });
         }
     }
     throw new Error("视频接口没有返回可播放的视频");
@@ -278,10 +279,10 @@ async function buildSeedanceContent(config: AiConfig, prompt: string, references
         media.push({ order: reference.order, content: item });
     }
     for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        media.push({ order: (video as ReferenceVideo & { order?: number }).order, content: { type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: "reference_video" } });
+        media.push({ order: (video as ReferenceVideo & { order?: number }).order, content: { type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: video.role || "reference_video", ...(video.component ? { component: video.component } : {}) } });
     }
     for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        media.push({ order: (audio as ReferenceAudio & { order?: number }).order, content: { type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: "reference_audio" } });
+        media.push({ order: (audio as ReferenceAudio & { order?: number }).order, content: { type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: audio.role || "reference_audio", ...(audio.component ? { component: audio.component } : {}) } });
     }
     media.sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
     content.push(...media.map((item) => item.content));

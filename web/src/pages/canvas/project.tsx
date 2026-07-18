@@ -59,6 +59,7 @@ import {
     buildGenerationConfig,
     findRetrySourceNode,
     generationReferenceUrls,
+    generationVideoReferences,
     getGenerationCount,
     getInputSummary,
     hydrateAssistantImages,
@@ -2386,6 +2387,7 @@ function InfiniteCanvasPage() {
                             generateAudio: generationConfig.videoGenerateAudio,
                             watermark: generationConfig.videoWatermark,
                             references: generationReferenceUrls(generationContext),
+                            videoReferences: generationVideoReferences(generationContext),
                         },
                     };
                     pendingChildIds = [videoId];
@@ -2420,6 +2422,7 @@ function InfiniteCanvasPage() {
                                               generateAudio: generationConfig.videoGenerateAudio,
                                               watermark: generationConfig.videoWatermark,
                                               references: generationReferenceUrls(generationContext),
+                            videoReferences: generationVideoReferences(generationContext),
                                           },
                                       }
                                     : node,
@@ -2573,6 +2576,7 @@ function InfiniteCanvasPage() {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const batchRoot = node.metadata?.batchRootId ? nodesRef.current.find((item) => item.id === node.metadata?.batchRootId) : null;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? { ...batchRoot?.metadata, ...node.metadata } : undefined;
+            const savedVideoMetadata = node.type === CanvasNodeType.Video ? node.metadata : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
             const generationConfig =
                 hasSavedImageMetadata && savedImageMetadata
@@ -2606,6 +2610,24 @@ function InfiniteCanvasPage() {
                 return;
             }
             const retryImages = retryReferenceImages || [];
+    const savedVideoReferences = (savedVideoMetadata?.videoReferences || []).filter((reference) => reference.kind === "video").map((reference) => ({
+                        id: `retry-${reference.url}`,
+                        name: "reference.mp4",
+                        type: "video/mp4",
+                        url: reference.url,
+                        storageKey: reference.url.includes(":") ? reference.url : undefined,
+                        role: reference.role,
+                        component: reference.component,
+                    }));
+            const savedAudioReferences = (savedVideoMetadata?.videoReferences || []).filter((reference) => reference.kind === "audio").map((reference) => ({
+                id: `retry-${reference.url}`,
+                name: "reference.mp3",
+                type: "audio/mpeg",
+                url: reference.url,
+                storageKey: reference.url.includes(":") ? reference.url : undefined,
+                role: reference.role,
+                component: reference.component,
+            }));
 
             setRunningNodeId(node.id);
             setNodes((prev) => prev.map((item) => (item.id === node.id && item.type === CanvasNodeType.Image ? prepareImageGenerationSubmission({ ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } }) : item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
@@ -2629,7 +2651,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
+                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, savedVideoReferences, savedAudioReferences, { signal: controller.signal }));
                     const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                     setNodes((prev) =>
                         prev.map((item) =>

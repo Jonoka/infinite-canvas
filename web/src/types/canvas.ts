@@ -56,6 +56,7 @@ export type CanvasNodeMetadata = {
     audioSpeed?: string;
     audioInstructions?: string;
     references?: string[];
+    videoReferences?: Array<{ kind: "image" | "video" | "audio"; url: string; role?: string; component?: string }>;
     naturalWidth?: number;
     naturalHeight?: number;
     freeResize?: boolean;
