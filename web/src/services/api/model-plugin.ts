@@ -54,6 +54,7 @@ function pluginRequestOptions(config: AiConfig, path: string, options: AxiosRequ
         isSameOrigin = false;
     }
     if (isSameOrigin) return request;
+    request.withCredentials = false;
     const sensitiveHeaderNames = new Set(["authorization", "proxyauthorization", "apikey", "xapikey", "xgoogapikey", "xapikeykey"]);
     request.headers = Object.fromEntries(
         Object.entries(request.headers || {}).filter(([name]) => !sensitiveHeaderNames.has(name.toLowerCase().replace(/[-_]/g, ""))),

@@ -44,6 +44,7 @@ return "done";
         expect(headers(requests[0].headers)).toMatchObject({ authorization: "Bearer current-secret" });
         expect(headers(requests[1].headers)).toMatchObject({ authorization: "Bearer current-secret" });
         expect(headers(requests[2].headers)).not.toHaveProperty("authorization");
+        expect(requests[2].withCredentials).toBe(false);
     });
 
     test("strips normalized API-key variants but keeps ordinary business headers cross-origin", async () => {
@@ -59,5 +60,6 @@ await http.get("https://uploads.third-party.test/jobs/cross-origin", { headers: 
 } }); return "done";` });
         const crossOriginHeaders = headers(requests[0].headers);
         expect(crossOriginHeaders).toEqual({ "x-request-id": "keep" });
+        expect(requests[0].withCredentials).toBe(false);
     });
 });
