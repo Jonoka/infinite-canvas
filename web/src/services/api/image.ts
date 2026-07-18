@@ -1,6 +1,7 @@
 import axios from "axios";
 
-import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { assertModelCapability, buildApiUrl, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { aiApiUrl, aiFetchOptions, aiRequestOptions, assertAiConfig } from "./ai-client";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -278,16 +279,6 @@ function withSystemPrompt(config: AiConfig, prompt: string) {
     return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
 }
 
-function aiApiUrl(config: AiConfig, path: string) {
-    return buildApiUrl(config.baseUrl, path);
-}
-
-function aiHeaders(config: AiConfig, contentType?: string) {
-    return {
-        Authorization: `Bearer ${config.apiKey}`,
-        ...(contentType ? { "Content-Type": contentType } : {}),
-    };
-}
 
 function geminiBaseUrl(config: Pick<AiConfig, "baseUrl">) {
     const normalizedBaseUrl = config.baseUrl.trim().replace(/\/+$/, "");
@@ -438,12 +429,12 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
 }
 
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
-    const response = await fetch(aiApiUrl(config, "/responses"), {
+    const response = await fetch(aiApiUrl(config, "/responses"), aiFetchOptions(config, {
         method: "POST",
-        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+        headers: { Accept: "text/event-stream" },
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
-    });
+    }));
     if (!response.ok) throw new Error(await readFetchError(response, "请求失败"));
     if (!response.body) {
         const payload = (await response.json()) as ResponseApiPayload;
@@ -638,7 +629,7 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
             ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
             contents: [{ role: "user", parts }],
         },
-        { headers: geminiHeaders(config), signal: options?.signal },
+        aiRequestOptions(config, { headers: geminiHeaders(config), signal: options?.signal }),
     );
     return parseGeminiImagePayload(response.data);
 }
@@ -660,9 +651,12 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const selectedModel = (config.imageModel || config.model).trim();
+    assertModelCapability(config, selectedModel, "image", "图像");
+    const requestConfig = resolveModelRequestConfig(config, selectedModel);
+    assertAiConfig(requestConfig, requestConfig.model, "图像");
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
-    const script = resolveModelScript(config, config.model || config.imageModel);
+    const script = resolveModelScript(config, selectedModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
@@ -706,8 +700,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 output_format: IMAGE_OUTPUT_FORMAT,
             },
             {
-                headers: aiHeaders(requestConfig, "application/json"),
-                signal: options?.signal,
+                ...aiRequestOptions(requestConfig, { headers: { "Content-Type": "application/json" }, signal: options?.signal }),
             },
         );
         const images = parseImagePayload(response.data);
@@ -718,10 +711,13 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
+    const selectedModel = (config.imageModel || config.model).trim();
+    assertModelCapability(config, selectedModel, "image", "图像");
+    const requestConfig = resolveModelRequestConfig(config, selectedModel);
+    assertAiConfig(requestConfig, requestConfig.model, "图像");
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
-    const script = resolveModelScript(config, config.model || config.imageModel);
+    const script = resolveModelScript(config, selectedModel);
     if (script) {
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
@@ -773,7 +769,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal });
+        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, aiRequestOptions(requestConfig, { signal: options?.signal }));
         const images = parseImagePayload(response.data);
         return images;
     } catch (error) {
@@ -782,8 +778,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
-    const requestConfig = resolveModelRequestConfig(config, config.model || config.textModel);
-    const script = resolveModelScript(config, config.model || config.textModel);
+    const selectedModel = (config.textModel || config.model).trim();
+    assertModelCapability(config, selectedModel, "text", "文本");
+    const requestConfig = resolveModelRequestConfig(config, selectedModel);
+    assertAiConfig(requestConfig, requestConfig.model, "文本");
+    const script = resolveModelScript(config, selectedModel);
     if (script) {
         try {
             const answer = await runModelPlugin<string>({
@@ -818,32 +817,31 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
     }
 }
 
-export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat">) {
+export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "apiMode" | "group">) {
     try {
         if (config.apiFormat === "gemini") {
-            const response = await axios.get<GeminiPayload>(geminiApiUrl({ ...defaultGeminiConfig, ...config }), { headers: geminiHeaders({ ...defaultGeminiConfig, ...config }) });
+            const geminiConfig = { ...defaultGeminiConfig, ...config } as AiConfig;
+            const response = await axios.get<GeminiPayload>(geminiApiUrl(geminiConfig), aiRequestOptions(geminiConfig, { headers: geminiHeaders(geminiConfig) }));
             validateGeminiPayload(response.data);
             return (response.data.models || [])
-                .map((model) => model.name?.replace(/^models\//, ""))
-                .filter((id): id is string => Boolean(id))
-                .sort((a, b) => a.localeCompare(b));
+                .map((model: { name?: string }) => model.name?.replace(/^models\//, ""))
+                .filter((id: string | undefined): id is string => Boolean(id))
+                .sort((a: string, b: string) => a.localeCompare(b));
         }
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
-            headers: {
-                Authorization: `Bearer ${config.apiKey}`,
-            },
-        });
+        const modelsUrl = new URL(aiApiUrl(config as AiConfig, "/models"));
+        if (config.apiMode === "newapi" && config.group.trim().toLowerCase() === "auto") modelsUrl.searchParams.delete("group");
+        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(modelsUrl.toString(), aiRequestOptions(config as AiConfig));
         return (response.data.data || [])
-            .map((model) => model.id)
-            .filter((id): id is string => Boolean(id))
-            .sort((a, b) => a.localeCompare(b));
+            .map((model: { id?: string }) => model.id)
+            .filter((id: string | undefined): id is string => Boolean(id))
+            .sort((a: string, b: string) => a.localeCompare(b));
     } catch (error) {
         throw new Error(readAxiosError(error, "读取模型失败"));
     }
 }
 
 export async function fetchChannelModels(channel: ModelChannel) {
-    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat, apiMode: channel.apiMode, group: channel.group });
 }
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {

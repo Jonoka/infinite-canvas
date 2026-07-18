@@ -8,6 +8,7 @@ import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent }
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { assertAiConfig } from "@/services/api/ai-client";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -72,9 +73,19 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     };
 
     const finishConfig = () => {
-        const ready = config.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length);
+        const ready = config.channels.some((channel) => channel.models.some((model) => {
+            try {
+                assertAiConfig({ ...config, ...channel, model: model.name }, model.name, "AI");
+                return true;
+            } catch {
+                return false;
+            }
+        }));
+        if (!ready) {
+            message.error("请先配置至少一个可用的 AI 模型、Base URL 和鉴权信息");
+            return;
+        }
         setConfigDialogOpen(false);
-        if (!ready) return;
         message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
         clearPromptContinue();
     };
@@ -316,6 +327,7 @@ export function AppConfigModal() {
             onCancel={() => setConfigDialogOpen(false)}
             styles={{ body: { maxHeight: "72vh", overflowY: "auto", paddingRight: 12 } }}
             footer={null}
+            forceRender
         >
             <AppConfigPanel showDoneButton initialTab={configTab} />
         </Modal>
@@ -330,6 +342,8 @@ function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
         baseUrl: channels[0]?.baseUrl || config.baseUrl,
         apiKey: channels[0]?.apiKey || config.apiKey,
         apiFormat: channels[0]?.apiFormat || config.apiFormat,
+        apiMode: channels[0]?.apiMode || config.apiMode,
+        group: channels[0]?.group ?? config.group,
     };
     return {
         ...next,

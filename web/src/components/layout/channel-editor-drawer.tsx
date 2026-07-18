@@ -2,13 +2,18 @@ import { Button, Drawer, Input, Segmented, Select, Space } from "antd";
 import { ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ApiMode, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
 
 const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
     { label: "OpenAI", value: "openai" },
     { label: "Gemini", value: "gemini" },
+];
+
+const apiModeOptions: Array<{ label: string; value: ApiMode }> = [
+    { label: "直连", value: "direct" },
+    { label: "New API", value: "newapi" },
 ];
 
 const capabilityOptions: Array<{ label: string; value: ModelCapability }> = [
@@ -78,14 +83,26 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                     <span className="mb-1 block text-sm font-medium">协议</span>
                     <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} onChange={changeApiFormat} />
                 </label>
+                <label className="block">
+                    <span className="mb-1 block text-sm font-medium">接口模式</span>
+                    <Select className="w-full" value={draft.apiMode} options={apiModeOptions} onChange={(apiMode) => patch({ apiMode })} />
+                </label>
                 <label className="block md:col-span-2">
                     <span className="mb-1 block text-sm font-medium">接口地址</span>
                     <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
                 </label>
-                <label className="block md:col-span-2">
-                    <span className="mb-1 block text-sm font-medium">API Key</span>
-                    <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
-                </label>
+                {draft.apiMode === "newapi" ? (
+                    <label className="block md:col-span-2">
+                        <span className="mb-1 block text-sm font-medium">New API 分组</span>
+                        <Input value={draft.group} onChange={(event) => patch({ group: event.target.value })} placeholder="例如：default" />
+                    </label>
+                ) : null}
+                {draft.apiMode === "direct" ? (
+                    <label className="block md:col-span-2">
+                        <span className="mb-1 block text-sm font-medium">API Key</span>
+                        <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
+                    </label>
+                ) : null}
             </div>
 
             <div className="mt-6 mb-3 flex flex-wrap items-center justify-between gap-2">

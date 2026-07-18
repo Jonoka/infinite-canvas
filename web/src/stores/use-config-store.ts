@@ -4,11 +4,13 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 export type ApiCallFormat = "openai" | "gemini";
+export type ApiMode = "direct" | "newapi";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 
 export type ChannelModel = {
     name: string;
-    capability: ModelCapability;
+    /** Optional for legacy persisted configs; missing metadata remains permissive. */
+    capability?: ModelCapability;
     script?: string;
 };
 
@@ -18,6 +20,8 @@ export type ModelChannel = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    apiMode: ApiMode;
+    group: string;
     models: ChannelModel[];
 };
 
@@ -26,6 +30,8 @@ export type AiConfig = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    apiMode: ApiMode;
+    group: string;
     channels: ModelChannel[];
     model: string;
     imageModel: string;
@@ -68,6 +74,8 @@ export const defaultConfig: AiConfig = {
     baseUrl: OPENAI_BASE_URL,
     apiKey: "",
     apiFormat: "openai",
+    apiMode: "direct",
+    group: "",
     channels: [
         {
             id: "default",
@@ -75,6 +83,8 @@ export const defaultConfig: AiConfig = {
             baseUrl: OPENAI_BASE_URL,
             apiKey: "",
             apiFormat: "openai",
+            apiMode: "direct",
+            group: "",
             models: [
                 { name: "gpt-image-2", capability: "image" },
                 { name: "grok-imagine-video", capability: "video" },
@@ -154,7 +164,16 @@ export function modelCapabilityOf(config: AiConfig, value: string): ModelCapabil
 
 export function modelMatchesCapability(config: AiConfig, value: string, capability?: ModelCapability) {
     if (!capability) return true;
-    return modelCapabilityOf(config, value) === capability;
+    const modelCapability = modelCapabilityOf(config, value);
+    return modelCapability === undefined || modelCapability === capability;
+}
+
+/** Reject an explicitly incompatible resolved model while keeping legacy metadata-less models usable. */
+export function assertModelCapability(config: AiConfig, value: string, capability: ModelCapability, label: string = capability) {
+    const modelCapability = modelCapabilityOf(config, value);
+    if (modelCapability !== undefined && modelCapability !== capability) {
+        throw new Error(`所选模型不支持${label}能力`);
+    }
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
@@ -169,7 +188,7 @@ export function resolveModelScript(config: AiConfig, value: string) {
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = resolveModelChannel(config, model);
-    return Boolean(model.trim() && channel.baseUrl.trim() && channel.apiKey.trim());
+    return Boolean(model.trim() && channel.baseUrl.trim() && (channel.apiMode === "newapi" ? channel.group.trim() : channel.apiKey.trim()));
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -206,7 +225,7 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
-                const config = { ...defaultConfig, ...persistedConfig };
+                const config = { ...defaultConfig, ...persistedConfig, apiMode: normalizeApiMode(persistedConfig.apiMode), group: (persistedConfig.group || "").trim() };
                 if (!Array.isArray(persistedConfig.channels)) config.channels = [];
                 const channels = normalizeChannels(config);
                 const models = modelOptionsFromChannels(channels);
@@ -267,6 +286,8 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,
+        apiMode: normalizeApiMode(channel?.apiMode),
+        group: channel?.group?.trim() || "",
         models: normalizeChannelModels(channel?.models),
     };
 }
@@ -327,6 +348,8 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
         baseUrl: channel.baseUrl,
         apiKey: channel.apiKey,
         apiFormat: channel.apiFormat,
+        apiMode: channel.apiMode,
+        group: channel.group,
     };
 }
 
@@ -348,6 +371,8 @@ function normalizeChannels(config: AiConfig) {
                 baseUrl: config.baseUrl || defaultConfig.baseUrl,
                 apiKey: config.apiKey || "",
                 apiFormat: config.apiFormat || defaultConfig.apiFormat,
+                apiMode: config.apiMode || defaultConfig.apiMode,
+                group: config.group || "",
                 models: normalizeChannelModels([config.model, config.imageModel, config.videoModel, config.textModel, config.audioModel].map(modelOptionName)),
             }),
         );
@@ -361,6 +386,19 @@ export function defaultBaseUrlForApiFormat(apiFormat: ApiCallFormat) {
 
 function normalizeApiFormat(apiFormat: unknown): ApiCallFormat {
     return apiFormat === "gemini" ? "gemini" : "openai";
+}
+
+function normalizeApiMode(apiMode: unknown): ApiMode {
+    return apiMode === "newapi" ? "newapi" : "direct";
+}
+
+export function normalizePersistedAiConfig(config: Partial<AiConfig>): AiConfig {
+    const persisted = { ...defaultConfig, ...config } as AiConfig;
+    return { ...persisted, apiMode: normalizeApiMode(persisted.apiMode), group: (persisted.group || "").trim(), channels: normalizeChannels(persisted) };
+}
+
+export function isNewApiMode(config: Pick<AiConfig | ModelChannel, "apiMode">) {
+    return config.apiMode === "newapi";
 }
 
 function uniqueModelOptions(models: string[]) {
