@@ -34,5 +34,8 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Protocol tests
+        run: bun run test:protocol
+
       - name: Build
         run: bun run build

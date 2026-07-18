@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
-import { buildApiUrl, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { aiApiUrl, aiRequestOptions } from "./ai-client";
 
 type RequestOptions = { signal?: AbortSignal };
 
@@ -38,13 +39,13 @@ function pluginHeaders(extra?: Record<string, string>, hasJsonBody = false): Rec
 
 function pluginUrl(config: AiConfig, path: string) {
     if (/^https?:/i.test(path)) return path;
-    return buildApiUrl(config.baseUrl, path.startsWith("/") ? path : `/${path}`);
+    return aiApiUrl(config, path.startsWith("/") ? path : `/${path}`);
 }
 
 function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHttp {
     const run = async (method: "get" | "post", path: string, body: unknown, opts?: PluginHttpOptions) => {
         const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-        const response = await axios.request({
+        const response = await axios.request(aiRequestOptions(config, {
             method,
             url: pluginUrl(config, path),
             data: method === "post" ? body : undefined,
@@ -52,7 +53,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
             headers: pluginHeaders({ Authorization: `Bearer ${config.apiKey}`, ...opts?.headers }, method === "post" && !isForm && body !== undefined),
             responseType: opts?.responseType || "json",
             signal: options?.signal,
-        });
+        }));
         return response.data;
     };
     return {
@@ -65,7 +66,7 @@ function createPluginHttp(config: AiConfig, options?: RequestOptions): PluginHtt
 /** Raw request with no automatic auth header — the script controls method, url, headers, body entirely. */
 function createPluginRequest(config: AiConfig, options?: RequestOptions) {
     return async (requestConfig: AxiosRequestConfig & { url: string }) => {
-        const response = await axios.request({ ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal });
+        const response = await axios.request(aiRequestOptions(config, { ...requestConfig, url: pluginUrl(config, requestConfig.url), signal: options?.signal }));
         return response.data;
     };
 }

@@ -59,8 +59,8 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
 
     const fetchModels = async () => {
         if (!channel) return;
-        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
-            message.error("请先填写接口地址和 API Key");
+        if (!channel.baseUrl.trim() || (channel.apiMode === "newapi" ? !channel.group.trim() : !channel.apiKey.trim())) {
+            message.error(channel.apiMode === "newapi" ? "请先填写接口地址和 New API 分组" : "请先填写接口地址和 API Key");
             return;
         }
         setLoading(true);
@@ -94,6 +94,7 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
                 </span>
             }
             styles={{ body: { maxHeight: "62vh", overflowY: "auto" } }}
+            forceRender
             footer={[
                 <Button key="cancel" onClick={onClose}>
                     取消
