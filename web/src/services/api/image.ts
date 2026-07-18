@@ -113,6 +113,45 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
+const GPT_IMAGE_RATIO_SIZE_MAP: Record<string, Record<string, string>> = {
+    auto: { "1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536", "4:3": "1152x864", "3:4": "864x1152", "5:4": "1120x896", "4:5": "896x1120", "16:9": "1280x720", "9:16": "720x1280", "21:9": "1456x624" },
+    low: { "1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536", "4:3": "1152x864", "3:4": "864x1152", "5:4": "1120x896", "4:5": "896x1120", "16:9": "1280x720", "9:16": "720x1280", "21:9": "1456x624" },
+    medium: { "1:1": "2048x2048", "3:2": "2496x1664", "2:3": "1664x2496", "4:3": "2304x1728", "3:4": "1728x2304", "5:4": "2240x1792", "4:5": "1792x2240", "16:9": "2560x1440", "9:16": "1440x2560", "21:9": "3024x1296" },
+    high: { "1:1": "2880x2880", "3:2": "3504x2336", "2:3": "2336x3504", "4:3": "3264x2448", "3:4": "2448x3264", "5:4": "3200x2560", "4:5": "2560x3200", "16:9": "3840x2160", "9:16": "2160x3840", "21:9": "3840x1648" },
+};
+
+function isGptImageModel(model: string | undefined) {
+    return /^(?:gpt-image-2|gpt-image-2-lite|gpt-image-2-pro)$/i.test((model || "").trim());
+}
+
+function isGptImageLiteModel(model: string | undefined) {
+    return (model || "").trim().toLowerCase() === "gpt-image-2-lite";
+}
+
+function imageRatio(size: string) {
+    const value = size.trim();
+    if (value.includes(":")) return value;
+    const dimensions = parseImageDimensions(value);
+    if (!dimensions) return undefined;
+    const divisor = greatestCommonDivisor(dimensions.width, dimensions.height);
+    return `${dimensions.width / divisor}:${dimensions.height / divisor}`;
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+    return right ? greatestCommonDivisor(right, left % right) : left;
+}
+
+const LITE_RATIO_HINT = /(?:\n\n)?输出必须采用 \d+(?:\.\d+)?:\d+(?:\.\d+)? (?:横向|竖向|方形)构图，目标宽高比严格为 \d+(?:\.\d+)?:\d+(?:\.\d+)?；实际像素可由模型决定。\s*$/;
+
+function withLiteRatioHint(model: string | undefined, prompt: string, size: string) {
+    if (!isGptImageLiteModel(model)) return prompt;
+    if (!size.includes(":")) return prompt;
+    const ratio = imageRatio(size);
+    if (!ratio) return prompt;
+    const dimensions = ratio.split(":").map(Number);
+    const orientation = dimensions[0] === dimensions[1] ? "方形" : dimensions[0] > dimensions[1] ? "横向" : "竖向";
+    return `${prompt.replace(LITE_RATIO_HINT, "").trimEnd()}\n\n输出必须采用 ${ratio} ${orientation}构图，目标宽高比严格为 ${ratio}；实际像素可由模型决定。`;
+}
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
 const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
@@ -183,7 +222,7 @@ function validateImageSize(width: number, height: number) {
     if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");
 }
 
-function resolveRequestSize(quality: string | undefined, size: string) {
+function resolveRequestSize(quality: string | undefined, size: string, model?: string) {
     const value = size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
@@ -191,7 +230,13 @@ function resolveRequestSize(quality: string | undefined, size: string) {
         validateImageSize(dimensions.width, dimensions.height);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveSize(quality, value);
+    if (value.includes(":")) {
+        if (isGptImageModel(model)) {
+            const preset = GPT_IMAGE_RATIO_SIZE_MAP[quality || "auto"]?.[value];
+            if (preset) return preset;
+        }
+        return resolveSize(quality, value);
+    }
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
 }
 
@@ -650,6 +695,34 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
     return images;
 }
 
+function shouldUseAsyncImageRequest(config: Pick<AiConfig, "apiMode" | "model">) {
+    return config.apiMode === "newapi" && isGptImageModel(config.model);
+}
+
+function buildGenerationRequestBody(config: AiConfig, prompt: string) {
+    const quality = isGptImageLiteModel(config.model) ? "low" : normalizeQuality(config.quality);
+    const size = config.size;
+    const requestSize = resolveRequestSize(quality, size, config.model);
+    const background = normalizeBackground(config.background);
+    return {
+        model: config.model,
+        prompt: withLiteRatioHint(config.model, withSystemPrompt(config, prompt), size),
+        n: Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1))),
+        ...(quality ? { quality } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
+        ...(background ? { background } : {}),
+        ...(shouldUseAsyncImageRequest(config) ? { async: true } : {}),
+        response_format: shouldUseAsyncImageRequest(config) ? "url" : "b64_json",
+        output_format: IMAGE_OUTPUT_FORMAT,
+    };
+}
+
+function buildEditFormData(config: AiConfig, prompt: string) {
+    const formData = new FormData();
+    Object.entries(buildGenerationRequestBody(config, prompt)).forEach(([key, value]) => formData.set(key, String(value)));
+    return formData;
+}
+
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
     const selectedModel = (config.imageModel || config.model).trim();
     assertModelCapability(config, selectedModel, "image", "图像");
@@ -658,6 +731,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, selectedModel);
     if (script) {
+        // Model plugins are authoritative: pass generic normalized inputs, not standard OpenAI model-specific rewrites.
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
@@ -683,22 +757,10 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
-    const background = normalizeBackground(config.background);
     try {
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(requestConfig, "/images/generations"),
-            {
-                model: requestConfig.model,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                ...(background ? { background } : {}),
-                response_format: "b64_json",
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
+            buildGenerationRequestBody({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, background: config.background }, prompt),
             {
                 ...aiRequestOptions(requestConfig, { headers: { "Content-Type": "application/json" }, signal: options?.signal }),
             },
@@ -719,6 +781,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const requestPrompt = buildImageReferencePromptText(prompt, references);
     const script = resolveModelScript(config, selectedModel);
     if (script) {
+        // Model plugins are authoritative: pass generic normalized inputs, not standard OpenAI model-specific rewrites.
         const quality = normalizeQuality(config.quality);
         const requestSize = resolveRequestSize(quality, config.size);
         const background = normalizeBackground(config.background);
@@ -746,24 +809,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
-    const background = normalizeBackground(config.background);
-    const formData = new FormData();
-    formData.set("model", requestConfig.model);
-    formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
-    formData.set("n", String(n));
-    formData.set("response_format", "b64_json");
-    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
-    if (quality) {
-        formData.set("quality", quality);
-    }
-    if (requestSize) {
-        formData.set("size", requestSize);
-    }
-    if (background) {
-        formData.set("background", background);
-    }
+    const formData = buildEditFormData({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, background: config.background }, requestPrompt);
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
     if (mask) formData.set("mask", dataUrlToFile(mask));
@@ -823,21 +869,27 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
             const geminiConfig = { ...defaultGeminiConfig, ...config } as AiConfig;
             const response = await axios.get<GeminiPayload>(geminiApiUrl(geminiConfig), aiRequestOptions(geminiConfig, { headers: geminiHeaders(geminiConfig) }));
             validateGeminiPayload(response.data);
-            return (response.data.models || [])
-                .map((model: { name?: string }) => model.name?.replace(/^models\//, ""))
-                .filter((id: string | undefined): id is string => Boolean(id))
+            const models = response.data.models;
+            if (!Array.isArray(models)) throw new Error("接口返回的模型列表格式无效");
+            return normalizeDiscoveredModelNames(models.map((model) => typeof model === "object" && model ? (model as { name?: unknown }).name : model).map((name) => typeof name === "string" ? name.replace(/^models\//, "") : name))
                 .sort((a: string, b: string) => a.localeCompare(b));
         }
         const modelsUrl = new URL(aiApiUrl(config as AiConfig, "/models"));
         if (config.apiMode === "newapi" && config.group.trim().toLowerCase() === "auto") modelsUrl.searchParams.delete("group");
         const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(modelsUrl.toString(), aiRequestOptions(config as AiConfig));
-        return (response.data.data || [])
-            .map((model: { id?: string }) => model.id)
-            .filter((id: string | undefined): id is string => Boolean(id))
-            .sort((a: string, b: string) => a.localeCompare(b));
+        const models = response.data.data;
+        if (!Array.isArray(models)) throw new Error("接口返回的模型列表格式无效");
+        return normalizeDiscoveredModelNames(models.map((model) => typeof model === "object" && model ? (model as { id?: unknown }).id : model)).sort((a, b) => a.localeCompare(b));
     } catch (error) {
         throw new Error(readAxiosError(error, "读取模型失败"));
     }
+}
+
+function normalizeDiscoveredModelNames(payload: unknown): string[] {
+    if (!Array.isArray(payload)) throw new Error("接口返回的模型列表格式无效");
+    const names = Array.from(new Set(payload.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)));
+    if (!names.length) throw new Error("接口返回的模型列表为空");
+    return names;
 }
 
 export async function fetchChannelModels(channel: ModelChannel) {
@@ -851,3 +903,5 @@ const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "
     model: "",
     systemPrompt: "",
 };
+
+export const __test__ = { buildGenerationRequestBody, buildEditFormData, normalizeDiscoveredModelNames };

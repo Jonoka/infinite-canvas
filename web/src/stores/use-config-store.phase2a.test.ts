@@ -7,10 +7,12 @@ type Phase2AStoreHooks = {
     isHiddenCompatibilityImageModel: (model: string) => boolean;
     migrateLegacyGptImageConfig: (config: AiConfig) => AiConfig;
     reconcileChannelModels: (config: AiConfig, channelId: string, models: string[]) => AiConfig;
+    normalizeChannelModels: (models: Array<string | ChannelModel> | undefined) => ChannelModel[];
+    withChannels: (config: AiConfig, channels: ReturnType<typeof storeApi.createModelChannel>[]) => AiConfig;
 };
 
 const phase2a = storeApi as typeof storeApi & Partial<Phase2AStoreHooks>;
-const { createModelChannel, defaultConfig, resolveModelRequestConfig, selectableModelsByCapability } = storeApi;
+const { createModelChannel, defaultConfig, modelMatchesCapability, resolveModelRequestConfig, selectableModelsByCapability } = storeApi;
 
 function requiredHook<K extends keyof Phase2AStoreHooks>(name: K): Phase2AStoreHooks[K] {
     const hook = phase2a[name];
@@ -66,6 +68,13 @@ describe("Phase 2A Lite/Pro config migration", () => {
         expect(requiredHook("migrateLegacyGptImageConfig")(custom)).toEqual(custom);
     });
 
+    test("does not rewrite an imported default-id channel with a non-official base URL", () => {
+        const imported = withDefaultChannel([image("gpt-image-2-pro")], "default::gpt-image-2-pro");
+        imported.channels[0] = { ...imported.channels[0], baseUrl: "https://gateway.example/v1" };
+
+        expect(requiredHook("migrateLegacyGptImageConfig")(imported)).toEqual(imported);
+    });
+
     test("hides the compatibility alias from image selection without hiding Lite or Pro", () => {
         const config = withDefaultChannel(
             [image("gpt-image-2"), image("gpt-image-2-lite"), image("gpt-image-2-pro")],
@@ -81,6 +90,58 @@ describe("Phase 2A Lite/Pro config migration", () => {
 });
 
 describe("Phase 2A authoritative channel reconciliation", () => {
+    test("discovered names are trimmed, deduped, and newly assigned guessed capabilities", () => {
+        expect(requiredHook("normalizeChannelModels")([" flux-1 ", "", "flux-1", "gpt-5.5"])).toEqual([
+            { name: "flux-1", capability: "image", script: undefined },
+            { name: "gpt-5.5", capability: "text", script: undefined },
+        ]);
+    });
+
+    test("persisted metadata-less models remain capability-permissive after normalization", () => {
+        const models = requiredHook("normalizeChannelModels")([{ name: "legacy-opaque-model" }]);
+        expect(models).toEqual([{ name: "legacy-opaque-model", capability: undefined, script: undefined }]);
+        const config = { ...defaultConfig, channels: [createModelChannel({ id: "legacy", models })] };
+        expect(modelMatchesCapability(config, "legacy::legacy-opaque-model", "image")).toBe(true);
+        expect(modelMatchesCapability(config, "legacy::legacy-opaque-model", "text")).toBe(true);
+    });
+
+    test("persisted metadata-less custom models remain selectable for every capability without duplicates or the image compatibility alias", () => {
+        const channel = {
+            ...createModelChannel({ id: "legacy" }),
+            models: [{ name: "legacy-opaque-model" }, { name: "legacy-opaque-model" }, { name: "gpt-image-2" }],
+        };
+        const config = { ...defaultConfig, channels: [channel], models: ["legacy::legacy-opaque-model", "legacy::gpt-image-2"] };
+
+        for (const capability of ["image", "video", "text", "audio"] as const) {
+            const options = selectableModelsByCapability(config, capability);
+            expect(options.filter((model) => model === "legacy::legacy-opaque-model")).toHaveLength(1);
+            if (capability === "image") expect(options).not.toContain("legacy::gpt-image-2");
+        }
+    });
+
+    test("reconciliation and channel replacement preserve a selected metadata-less model", () => {
+        const legacy = { name: "legacy-opaque-model" };
+        const fallback = image("fallback-image");
+        const channel = createModelChannel({ id: "legacy", models: [legacy, fallback] });
+        const selected = "legacy::legacy-opaque-model";
+        const config = {
+            ...defaultConfig,
+            channels: [channel],
+            models: [selected, "legacy::fallback-image"],
+            model: selected,
+            imageModel: selected,
+            videoModel: selected,
+            textModel: selected,
+            audioModel: selected,
+        };
+
+        const reconciled = requiredHook("reconcileChannelModels")(config, "legacy", ["legacy-opaque-model", "fallback-image"]);
+        expect([reconciled.model, reconciled.imageModel, reconciled.videoModel, reconciled.textModel, reconciled.audioModel]).toEqual(Array(5).fill(selected));
+
+        const replaced = requiredHook("withChannels")(config, [createModelChannel({ ...channel, models: [legacy, fallback] })]);
+        expect([replaced.model, replaced.imageModel, replaced.videoModel, replaced.textModel, replaced.audioModel]).toEqual(Array(5).fill(selected));
+    });
+
     test("fixed-group discovery removes stale models and repairs invalid image and generic selections", () => {
         const config = withDefaultChannel([image("gpt-image-2-lite"), image("gpt-image-2-pro"), image("stale-image")], "default::gpt-image-2-pro");
         config.channels[0] = { ...config.channels[0], apiMode: "newapi", group: "GPT生图特价" };
@@ -113,5 +174,15 @@ describe("Phase 2A authoritative channel reconciliation", () => {
 
         expect(resolveModelRequestConfig(config, "default::gpt-image-2-lite").group).toBe("GPT 生图/专用");
         expect(resolveModelRequestConfig(config, "default::gpt-image-2-pro").group).toBe("GPT 生图/专用");
+    });
+
+    test("channel deletion repairs the generic selection as well as capability selections", () => {
+        const first = createModelChannel({ id: "first", models: [image("first-image")] });
+        const second = createModelChannel({ id: "second", models: [image("second-image")] });
+        const config = { ...defaultConfig, channels: [first, second], models: ["first::first-image", "second::second-image"], model: "second::second-image", imageModel: "second::second-image" };
+
+        const repaired = requiredHook("withChannels")(config, [first]);
+        expect(repaired.imageModel).toBe("first::first-image");
+        expect(repaired.model).toBe("first::first-image");
     });
 });

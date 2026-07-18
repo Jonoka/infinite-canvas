@@ -66,9 +66,11 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
         setLoading(true);
         try {
             const models = await fetchChannelModels(channel);
+            setExisting([]);
             setFetched(models);
+            setSelected(new Set(models));
             setActiveTab("new");
-            message.success(`已拉取 ${models.length} 个模型`);
+            message.success(`已拉取 ${models.length} 个模型，已按上游列表更新选择`);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "拉取模型失败");
         } finally {
