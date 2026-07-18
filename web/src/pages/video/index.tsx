@@ -21,6 +21,7 @@ import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } f
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+import { freezeVideoRetrySnapshot, selectVideoLogRetrySnapshot } from "@/lib/video-retry-snapshot";
 
 type GeneratedVideo = {
     id: string;
@@ -31,6 +32,7 @@ type GeneratedVideo = {
     height: number;
     bytes: number;
     mimeType: string;
+    urls?: string[];
 };
 
 type GenerationResult = {
@@ -98,6 +100,7 @@ export default function VideoPage() {
     const videoCommand = useWorkbenchAgentStore((state) => state.videoCommand);
     const clearVideoCommand = useWorkbenchAgentStore((state) => state.clearVideoCommand);
     const processedCommandRef = useRef(0);
+    const retrySnapshotRef = useRef<{ text: string; config: AiConfig; references: ReferenceImage[]; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[] } | null>(null);
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
@@ -169,9 +172,10 @@ export default function VideoPage() {
             message.error("剪切板里没有可读取的图片");
         }
     };
-    const generate = async () => {
-        const snapshot = buildRequestSnapshot();
+    const generate = async (retrySnapshot?: { text: string; config: AiConfig; references: ReferenceImage[]; videoReferences: ReferenceVideo[]; audioReferences: ReferenceAudio[] }) => {
+        const snapshot = retrySnapshot || buildRequestSnapshot();
         if (!snapshot) return;
+        retrySnapshotRef.current = freezeVideoRetrySnapshot(snapshot);
         setElapsedMs(0);
         setRunning(true);
         setPreviewLog(null);
@@ -227,7 +231,15 @@ export default function VideoPage() {
     };
 
     const retryResult = () => {
-        void generate();
+        const historical = previewLog ? selectVideoLogRetrySnapshot<ReferenceImage, ReferenceVideo, ReferenceAudio>(previewLog) : null;
+        const snapshot = historical ? { ...historical, config: buildVideoConfig({ ...effectiveConfig, ...historical.config }, String(historical.config.videoModel || previewLog?.model || model)) } : retrySnapshotRef.current;
+        if (snapshot) {
+            setPrompt(snapshot.text);
+            setReferences(snapshot.references);
+            setVideoReferences(snapshot.videoReferences);
+            setAudioReferences(snapshot.audioReferences);
+            void generate(snapshot);
+        } else void generate();
     };
 
     const downloadVideo = (video: GeneratedVideo) => {
@@ -318,6 +330,7 @@ export default function VideoPage() {
                     const nextVideo: GeneratedVideo = {
                         id: nanoid(),
                         url: stored.url,
+                        urls: (stored as typeof stored & { urls?: string[] }).urls,
                         storageKey: stored.storageKey,
                         durationMs: Date.now() - log.createdAt,
                         width: stored.width || 1280,

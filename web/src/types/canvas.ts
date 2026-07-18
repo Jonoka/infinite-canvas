@@ -56,6 +56,7 @@ export type CanvasNodeMetadata = {
     audioSpeed?: string;
     audioInstructions?: string;
     references?: string[];
+    videoReferences?: Array<{ kind: "image" | "video" | "audio"; url: string; role?: string; component?: string }>;
     naturalWidth?: number;
     naturalHeight?: number;
     freeResize?: boolean;
@@ -69,6 +70,7 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    urls?: string[];
     groupId?: string;
     interactive?: boolean; // 插件节点「交互 ⇄ 移动」开关状态(见 CanvasNodeDefinition.interactionToggle)
 };

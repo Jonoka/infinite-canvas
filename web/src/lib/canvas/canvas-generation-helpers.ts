@@ -6,7 +6,9 @@ import type { NodeGenerationInput } from "@/components/canvas/canvas-node-genera
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import type { ReferenceImage } from "@/types/image";
+import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
+import { normalizeVideoReferences } from "@/lib/canvas/video-reference-normalization";
 
 export function imageExtension(dataUrl: string) {
     return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
@@ -27,6 +29,14 @@ export function generationReferenceUrls(context: { referenceImages: ReferenceIma
         ...context.referenceVideos.map((video) => video.storageKey || video.url).filter((url): url is string => Boolean(url)),
         ...(context.referenceAudios || []).map((audio) => audio.storageKey || audio.url).filter((url): url is string => Boolean(url)),
     ];
+}
+
+export function generationVideoReferences(context: { referenceImages: ReferenceImage[]; referenceVideos: Array<{ storageKey?: string; url?: string; role?: string; component?: string; order?: number }>; referenceAudios?: Array<{ storageKey?: string; url?: string; role?: string; component?: string; order?: number }> }) {
+    return normalizeVideoReferences([
+        ...context.referenceImages.map((item) => ({ kind: "image" as const, url: referenceUrl(item) || "", role: (item as ReferenceImage & { role?: string }).role, component: (item as ReferenceImage & { component?: string }).component, order: (item as ReferenceImage & { order?: number }).order })),
+        ...context.referenceVideos.map((item) => ({ kind: "video" as const, url: item.storageKey || item.url || "", role: item.role || "reference_video", component: item.component, order: item.order })),
+        ...(context.referenceAudios || []).map((item) => ({ kind: "audio" as const, url: item.storageKey || item.url || "", role: item.role || "reference_audio", component: item.component, order: item.order })),
+    ].filter((item) => Boolean(item.url)));
 }
 
 export async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
@@ -74,6 +84,49 @@ export async function hydrateAssistantImages(sessions: CanvasAssistantSession[])
             ),
         })),
     );
+}
+
+export interface CanvasVideoRetryImageReference extends Pick<ReferenceImage, "dataUrl" | "storageKey"> {
+    role?: string;
+    component?: string;
+    order: number;
+}
+
+export interface CanvasVideoRetryVideoReference extends Pick<ReferenceVideo, "url" | "storageKey"> {
+    role?: string;
+    component?: string;
+    order: number;
+}
+
+export interface CanvasVideoRetryAudioReference extends Pick<ReferenceAudio, "url" | "storageKey"> {
+    role?: string;
+    component?: string;
+    order: number;
+}
+
+export interface CanvasVideoRetryPlan {
+    prompt: string;
+    config: AiConfig;
+    references: CanvasVideoRetryImageReference[];
+    videoReferences: CanvasVideoRetryVideoReference[];
+    audioReferences: CanvasVideoRetryAudioReference[];
+}
+
+type SavedCanvasVideoReference = {
+    kind: "image" | "video" | "audio";
+    url: string;
+    role?: string;
+    component?: string;
+};
+
+export function buildCanvasVideoRetryPlan(input: { currentConfig: AiConfig; metadata: { prompt: string; model: string; size: string; seconds: string; vquality: string; generateAudio: string; watermark: string; videoReferences: SavedCanvasVideoReference[] } }): CanvasVideoRetryPlan {
+    const config = { ...input.currentConfig, model: input.metadata.model, videoModel: input.metadata.model, size: input.metadata.size, videoSeconds: input.metadata.seconds, vquality: input.metadata.vquality, videoGenerateAudio: input.metadata.generateAudio, videoWatermark: input.metadata.watermark };
+    const refs = input.metadata.videoReferences;
+    const commonReferenceFields = (item: SavedCanvasVideoReference) => ({ ...(item.url.startsWith(`${item.kind}:`) ? { storageKey: item.url } : {}), ...(item.role ? { role: item.role } : {}), ...(item.component ? { component: item.component } : {}), order: refs.indexOf(item) });
+    const imageReference = (item: SavedCanvasVideoReference): CanvasVideoRetryImageReference => ({ dataUrl: item.url, ...commonReferenceFields(item) });
+    const videoReference = (item: SavedCanvasVideoReference): CanvasVideoRetryVideoReference => ({ url: item.url, ...commonReferenceFields(item) });
+    const audioReference = (item: SavedCanvasVideoReference): CanvasVideoRetryAudioReference => ({ url: item.url, ...commonReferenceFields(item) });
+    return { prompt: input.metadata.prompt, config, references: refs.filter((item) => item.kind === "image").map(imageReference), videoReferences: refs.filter((item) => item.kind === "video").map(videoReference), audioReferences: refs.filter((item) => item.kind === "audio").map(audioReference) };
 }
 
 export function getGenerationCount(count: string) {

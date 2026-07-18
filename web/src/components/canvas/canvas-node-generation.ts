@@ -38,9 +38,9 @@ export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData
         .map((input) => input.text)
         .filter(Boolean)
         .join("\n\n");
-    const referenceImages = inputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
-    const referenceVideos = inputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
-    const referenceAudios = inputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
+    const referenceImages = inputs.map((input, order) => input.image && { ...input.image, order }).filter((image): image is ReferenceImage & { order: number } => Boolean(image));
+    const referenceVideos = inputs.map((input, order) => input.video && { ...input.video, order }).filter((video): video is ReferenceVideo & { order: number } => Boolean(video));
+    const referenceAudios = inputs.map((input, order) => input.audio && { ...input.audio, order }).filter((audio): audio is ReferenceAudio & { order: number } => Boolean(audio));
 
     return {
         prompt: upstreamText ? `${prompt}\n\n${upstreamText}` : prompt,
@@ -84,9 +84,9 @@ function buildComposerGenerationContext(inputs: NodeGenerationInput[], prompt: s
 
     nextPrompt += prompt.slice(lastIndex);
     if (textBlocks.length) nextPrompt = `${nextPrompt.trim()}\n\n${textBlocks.join("\n\n")}`;
-    const referenceImages = selectedInputs.map((input) => input.image).filter((image): image is ReferenceImage => Boolean(image));
-    const referenceVideos = selectedInputs.map((input) => input.video).filter((video): video is ReferenceVideo => Boolean(video));
-    const referenceAudios = selectedInputs.map((input) => input.audio).filter((audio): audio is ReferenceAudio => Boolean(audio));
+    const referenceImages = selectedInputs.map((input, order) => input.image && { ...input.image, order }).filter((image): image is ReferenceImage & { order: number } => Boolean(image));
+    const referenceVideos = selectedInputs.map((input, order) => input.video && { ...input.video, order }).filter((video): video is ReferenceVideo & { order: number } => Boolean(video));
+    const referenceAudios = selectedInputs.map((input, order) => input.audio && { ...input.audio, order }).filter((audio): audio is ReferenceAudio & { order: number } => Boolean(audio));
 
     if (!hasToken) {
         return {

@@ -5,6 +5,7 @@ import { dataUrlToFile } from "@/lib/image-utils";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { boolConfig, buildSeedancePromptText, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceVideoReferenceError, SEEDANCE_REFERENCE_LIMITS } from "@/lib/seedance-video";
+import { preserveVideoGenerationResult } from "@/lib/video-generation-contracts";
 import { assertModelCapability, modelOptionName, resolveModelRequestConfig, resolveModelScript, type AiConfig } from "@/stores/use-config-store";
 import { aiApiUrl, aiRequestOptions, assertAiConfig } from "./ai-client";
 import { runModelPlugin } from "./model-plugin";
@@ -25,7 +26,7 @@ type SeedanceTask = {
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
+export type VideoGenerationResult = { blob?: Blob; url?: string; urls?: string[]; mimeType?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
@@ -35,16 +36,24 @@ const pluginVideoResults = new Map<string, VideoGenerationResult>();
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationResult> {
     const task = await createVideoGenerationTask(config, prompt, references, videoReferences, audioReferences, options);
-    const delayMs = task.provider === "seedance" ? 5000 : 2500;
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        const state = await pollVideoGenerationTask(config, task, options);
-        if (state.status === "completed") return state.result;
-        if (state.status === "failed") throw new Error(state.error);
-        if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
-        await delay(delayMs, options?.signal);
+    try {
+        const delayMs = task.provider === "seedance" ? 5000 : 2500;
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+            if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            const state = await pollVideoGenerationTask(config, task, options);
+            if (state.status === "completed") return state.result;
+            if (state.status === "failed") throw new Error(state.error);
+            if (attempt === 119) throw new Error(`${task.provider === "seedance" ? "Seedance " : ""}视频生成超时，请稍后重试`);
+            await delay(delayMs, options?.signal);
+        }
+        throw new Error("视频生成超时，请稍后重试");
+    } finally {
+        discardPluginVideoTask(task);
     }
-    throw new Error("视频生成超时，请稍后重试");
+}
+
+export function discardPluginVideoTask(task: VideoGenerationTask) {
+    if (task.provider === "plugin") pluginVideoResults.delete(task.id);
 }
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] = [], videoReferences: ReferenceVideo[] = [], audioReferences: ReferenceAudio[] = [], options?: RequestOptions): Promise<VideoGenerationTask> {
@@ -53,7 +62,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
     assertVideoConfig(requestConfig, requestConfig.model);
     const script = resolveModelScript(config, selectedModel);
-    if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, options);
+    if (script) return createPluginVideoTask(requestConfig, selectedModel, script, prompt, references, videoReferences, audioReferences, options);
     if (isSeedanceVideoConfig(requestConfig)) {
         return createSeedanceTask(requestConfig, selectedModel, prompt, references, videoReferences, audioReferences, options);
     }
@@ -66,14 +75,16 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     if (task.provider === "plugin") {
         const result = pluginVideoResults.get(task.id);
-        return result ? { status: "completed", result } : { status: "failed", error: "插件视频任务已失效，请重新生成" };
+        if (!result) return { status: "failed", error: "插件视频任务已失效，请重新生成" };
+        pluginVideoResults.delete(task.id);
+        return { status: "completed", result };
     }
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);
     return task.provider === "seedance" ? pollSeedanceTask(requestConfig, task, options) : pollOpenAIVideoTask(requestConfig, task, options);
 }
 
-async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], options?: RequestOptions): Promise<VideoGenerationTask> {
+async function createPluginVideoTask(config: AiConfig, model: string, script: string, prompt: string, references: ReferenceImage[], videoReferences: ReferenceVideo[], audioReferences: ReferenceAudio[], options?: RequestOptions): Promise<VideoGenerationTask> {
     assertAiConfig(config, model, "视频");
     const refs = await Promise.all(references.map((image) => imageToDataUrl(image)));
     const result = videoPluginResult(
@@ -83,6 +94,8 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
             config,
             prompt,
             images: refs,
+            videos: videoReferences,
+            audios: audioReferences,
             params: {
                 seconds: normalizeVideoSeconds(config.videoSeconds),
                 size: normalizeVideoSize(config.size),
@@ -101,23 +114,62 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
 
 function videoPluginResult(result: unknown): VideoGenerationResult {
     if (result instanceof Blob) return { blob: result };
-    if (typeof result === "string") return { url: result, mimeType: "video/mp4" };
-    if (result && typeof result === "object") {
-        const record = result as Record<string, unknown>;
-        if (record.blob instanceof Blob) return { blob: record.blob };
-        const url = [record.url, record.video_url, record.result_url].find((value) => typeof value === "string" && value) as string | undefined;
-        if (url) return { url, mimeType: "video/mp4" };
-    }
-    throw new Error("模型调用脚本没有返回视频");
+    const urls: string[] = [];
+    collectVideoPluginUrls(result, urls, new Set());
+    if (urls.length) return { url: urls[0], urls, mimeType: "video/mp4" };
+    if (hasPendingVideoPluginResult(result, new Set())) throw new Error("插件尚未返回可用的视频结果");
+    throw new Error("模型调用脚本没有返回可用的视频结果");
 }
 
-export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
-    if (result.blob) return uploadMediaFile(result.blob, "video");
+function collectVideoPluginUrls(value: unknown, urls: string[], seen: Set<object>) {
+    if (typeof value === "string") {
+        const url = value.trim();
+        if (isValidVideoPluginUrl(url)) urls.push(url);
+        return;
+    }
+    if (!value || typeof value !== "object" || value instanceof Blob || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+        value.forEach((item) => collectVideoPluginUrls(item, urls, seen));
+        return;
+    }
+    const object = value as Record<string, unknown>;
+    const status = typeof object.status === "string" ? object.status.toLowerCase() : "";
+    if (["pending", "queued", "running", "processing", "in_progress"].includes(status)) return;
+    for (const key of ["url", "video_url", "result_url"]) {
+        if (key in object) collectVideoPluginUrls(object[key], urls, seen);
+    }
+    for (const key of ["urls", "result_urls", "videos", "results", "data"]) {
+        if (key in object) collectVideoPluginUrls(object[key], urls, seen);
+    }
+}
+
+function isValidVideoPluginUrl(value: string) {
+    try {
+        const protocol = new URL(value).protocol;
+        return ["http:", "https:", "blob:", "data:", "asset:"].includes(protocol);
+    } catch {
+        return false;
+    }
+}
+
+function hasPendingVideoPluginResult(value: unknown, seen: Set<object>): boolean {
+    if (!value || typeof value !== "object" || value instanceof Blob || seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) return value.some((item) => hasPendingVideoPluginResult(item, seen));
+    const object = value as Record<string, unknown>;
+    const status = typeof object.status === "string" ? object.status.toLowerCase() : "";
+    return ["pending", "queued", "running", "processing", "in_progress"].includes(status)
+        || Object.entries(object).some(([key, item]) => key !== "status" && hasPendingVideoPluginResult(item, seen));
+}
+
+export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile & { urls?: string[] }> {
+    if (result.blob) return preserveVideoGenerationResult(result, await uploadMediaFile(result.blob, "video"));
     if (result.url) {
         try {
-            return await uploadMediaFile(result.url, "video");
+            return preserveVideoGenerationResult(result, await uploadMediaFile(result.url, "video"));
         } catch {
-            return { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
+            return preserveVideoGenerationResult(result, { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" });
         }
     }
     throw new Error("视频接口没有返回可播放的视频");
@@ -229,15 +281,23 @@ async function buildSeedanceContent(config: AiConfig, prompt: string, references
     const content: Array<Record<string, unknown>> = [];
     const text = buildSeedancePromptText(prompt, references, videoReferences, audioReferences);
     if (text) content.push({ type: "text", text });
+    const media: Array<{ order?: number; content: Record<string, unknown> }> = [];
     for (const image of references.slice(0, SEEDANCE_REFERENCE_LIMITS.images)) {
-        content.push({ type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, image) }, role: "reference_image" });
+        const reference = image as ReferenceImage & { order?: number; role?: string; component?: string };
+        const item: Record<string, unknown> = { type: "image_url", image_url: { url: await resolveSeedanceImageUrl(config, image) }, role: reference.role || "reference_image" };
+        if (reference.role === "component" && reference.component) item.component = reference.component;
+        media.push({ order: reference.order, content: item });
     }
     for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        content.push({ type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: "reference_video" });
+        const reference = video as ReferenceVideo & { order?: number; role?: string; component?: string };
+        media.push({ order: reference.order, content: { type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: reference.role || "reference_video", ...(reference.component ? { component: reference.component } : {}) } });
     }
     for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        content.push({ type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: "reference_audio" });
+        const reference = audio as ReferenceAudio & { order?: number; role?: string; component?: string };
+        media.push({ order: reference.order, content: { type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: reference.role || "reference_audio", ...(reference.component ? { component: reference.component } : {}) } });
     }
+    media.sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
+    content.push(...media.map((item) => item.content));
     return content;
 }
 
