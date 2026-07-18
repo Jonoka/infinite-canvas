@@ -1896,11 +1896,12 @@ function InfiniteCanvasPage() {
             setDialogNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             const isCurrentRequest = generationRequestGuard(childId, controller);
+            const angleSource = { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
             try {
                 const initial = await requestEdit(
                     generationConfig,
                     prompt,
-                    [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }],
+                    [angleSource],
                     undefined,
                     { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) },
                 ).then((items) => ({ status: "fulfilled", value: items[0] }) as PromiseFulfilledResult<{ id: string; dataUrl: string }>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
@@ -1910,7 +1911,7 @@ function InfiniteCanvasPage() {
                         return requestEdit(
                             requestConfig,
                             prompt,
-                            [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }],
+                            [angleSource],
                             undefined,
                             { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) },
                         ).then((items) => items[0]);
