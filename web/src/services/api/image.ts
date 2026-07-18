@@ -108,6 +108,7 @@ export type ImageTaskAcceptance = {
     recoverable: boolean;
 };
 export type RequestOptions = { signal?: AbortSignal; onTaskAccepted?: (task: ImageTaskAcceptance) => void | Promise<void> };
+type ImageResult = { id: string; dataUrl: string };
 
 export class ImageRequestError extends Error {
     constructor(message: string, public readonly code?: string | number) {
@@ -308,7 +309,7 @@ function resolveImageDataUrl(item: Record<string, unknown>) {
     return null;
 }
 
-function parseImagePayload(payload: ImageApiResponse) {
+function parseImagePayload(payload: ImageApiResponse): ImageResult[] {
     assertNoImageTaskError(payload, "请求失败");
     const data = Array.isArray(payload.data) ? payload.data : payload.result && Array.isArray(payload.result.data) ? payload.result.data : [];
     const images = data
@@ -387,7 +388,7 @@ function classifyImageTaskStatus(status: unknown, _apiMode: "newapi" | "direct")
 }
 
 function unwrapImageTaskStatus(payload: unknown) { return successfulEnvelope(payload, "图片任务查询失败"); }
-function parseCompletedImageTask(payload: unknown) {
+function parseCompletedImageTask(payload: unknown): ImageResult[] {
     assertNoImageTaskError(payload, "图片任务解析失败");
     const task = unwrapImageTaskStatus(payload);
     return parseImagePayload((isRecord(task.result) ? task.result : task) as ImageApiResponse);
@@ -464,7 +465,7 @@ async function resolveSubmittedImageTask(input: {
     config: AiConfig;
     kind: "generation" | "edit";
     onAccepted: (task: ImageTaskAcceptance) => void | Promise<void>;
-    poll: (input: { taskId: string; timeoutMs: number; signal: AbortSignal }) => unknown | Promise<unknown>;
+    poll: (input: { taskId: string; timeoutMs: number; signal: AbortSignal }) => ImageResult[] | Promise<ImageResult[]>;
     pollTimeoutMs: number;
 }) {
     assertNoImageTaskError(input.submittedPayload, "图片任务提交失败");
@@ -528,7 +529,7 @@ async function pollSubmittedImageTask(
     kind: "generation" | "edit",
     input: { taskId: string; timeoutMs: number; signal: AbortSignal },
     options?: RequestOptions,
-) {
+) : Promise<ImageResult[]> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
         const response = await pollImageTask({
             taskId: input.taskId, timeoutMs: input.timeoutMs,
@@ -552,7 +553,7 @@ async function pollSubmittedImageTask(
     }
     throw new ImageRequestError("图片生成超时，请稍后重试");
 }
-async function resolveImageSubmission(config: AiConfig, kind: "generation" | "edit", payload: ImageApiResponse, options?: RequestOptions) {
+async function resolveImageSubmission(config: AiConfig, kind: "generation" | "edit", payload: ImageApiResponse, options?: RequestOptions): Promise<ImageResult[]> {
     const envelope = successfulEnvelope(payload, "图片请求失败");
     if (!("task_id" in envelope) && !("id" in envelope)) return parseImagePayload(envelope as ImageApiResponse);
     return resolveSubmittedImageTask({
@@ -1046,7 +1047,7 @@ function buildEditFormData(config: AiConfig, prompt: string) {
     return formData;
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
+export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<ImageResult[]> {
     const selectedModel = (config.imageModel || config.model).trim();
     assertModelCapability(config, selectedModel, "image", "图像");
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
@@ -1097,7 +1098,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
+export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions): Promise<ImageResult[]> {
     const selectedModel = (config.imageModel || config.model).trim();
     assertModelCapability(config, selectedModel, "image", "图像");
     const requestConfig = resolveModelRequestConfig(config, selectedModel);
