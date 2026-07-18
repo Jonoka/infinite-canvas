@@ -2436,7 +2436,7 @@ function InfiniteCanvasPage() {
                             ),
                         );
                     } finally {
-                        finishGenerationRequest(videoId, controller);
+                        if (!isEmptyVideoNode) finishGenerationRequest(videoId, controller);
                     }
                     return;
                 }
