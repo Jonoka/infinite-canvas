@@ -25,6 +25,8 @@ export type RunPluginArgs = {
     config: AiConfig;
     prompt?: string;
     images?: string[];
+    videos?: unknown[];
+    audios?: unknown[];
     messages?: unknown[];
     params?: Record<string, unknown>;
     signal?: AbortSignal;
@@ -119,6 +121,8 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
     const runner = new Function(
         "prompt",
         "images",
+        "videos",
+        "audios",
         "messages",
         "params",
         "model",
@@ -137,6 +141,8 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
         return await runner(
             args.prompt || "",
             args.images || [],
+            args.videos || [],
+            args.audios || [],
             args.messages || [],
             args.params || {},
             config.model,
