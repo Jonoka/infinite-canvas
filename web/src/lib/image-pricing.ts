@@ -37,7 +37,9 @@ export function calculateImageCost(payload: PricingPayload, selectedModel: strin
     const group = requestedGroup === "auto" ? pricing.autoGroups.find((candidate): candidate is string => typeof candidate === "string" && enabled.includes(candidate)) : requestedGroup;
     if (price === null || !group || !enabled.includes(group)) return null;
     const ratio = finiteNonnegative(pricing.ratios[group]);
-    return ratio === null ? null : { cost: price * ratio * count, group };
+    if (ratio === null) return null;
+    const cost = Math.round((price * ratio * count + Number.EPSILON) * 1e12) / 1e12;
+    return { cost, group };
 }
 
 export async function loadImageCostPreview(input: { model: string; group: string; count: number; fetchPricing: () => Promise<PricingPayload> }) {

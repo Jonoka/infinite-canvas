@@ -33,9 +33,12 @@ async function defaultConsent(config: AiConfig, count: number, loadPricing?: Dep
 }
 
 export function createImageWorkbenchActions<T>(dependencies: Dependencies<T>) {
-    const consent = (config: AiConfig, count: number, failedIndexes: number[]) => dependencies.requestConsent
-        ? dependencies.requestConsent({ config, count, failedIndexes })
-        : defaultConsent(config, count, dependencies.loadPricing);
+    const consent = async (config: AiConfig, count: number, failedIndexes: number[]) => {
+        if (!dependencies.requestConsent) return defaultConsent(config, count, dependencies.loadPricing);
+        let pricing: PricingPayload | null = null;
+        try { pricing = dependencies.loadPricing ? await dependencies.loadPricing(config) : await fetchPricing(config) as PricingPayload; } catch { /* explicit consent remains available without a quote */ }
+        return dependencies.requestConsent({ config, count, failedIndexes, pricing });
+    };
     return {
         generateBatch: async (config: AiConfig, prompts: string[]) => retryLitePoolFailuresWithConsent({
             results: await Promise.allSettled(prompts.map((prompt) => dependencies.request(prompt, config))),
