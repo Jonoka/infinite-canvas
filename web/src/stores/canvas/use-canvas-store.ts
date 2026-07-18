@@ -53,16 +53,24 @@ export function createDurableCanvasPersistence<T>(options: {
     let active: Promise<void> | undefined;
 
     const drain = (): Promise<void> => {
-        if (active) return active.then(drain);
+        if (active) return active.then(() => drain());
         if (!queued.length) return Promise.resolve();
         const snapshot = queued.shift()!;
-        active = options.write(snapshot).catch((error) => {
-            // Retry the exact failed snapshot before any state accepted while
-            // that write was in flight.
-            queued.unshift(snapshot);
-            throw error;
-        }).finally(() => { active = undefined; });
-        return active.then(drain);
+        const write = options.write(snapshot);
+        active = write;
+        return write.then(
+            () => {
+                active = undefined;
+                return drain();
+            },
+            (error) => {
+                active = undefined;
+                // Retry the exact failed snapshot before any state accepted
+                // while that write was in flight.
+                queued.unshift(snapshot);
+                throw error;
+            },
+        );
     };
 
     return {

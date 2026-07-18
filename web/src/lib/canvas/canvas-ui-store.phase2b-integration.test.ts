@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
 
 import { canvasNodeRetryLabel } from "./canvas-generation-helpers";
-import {
+
+// Vite normally injects this compile-time constant. Bun evaluates the imported
+// production modules directly in this protocol test, so provide the same benign
+// development fallback before loading the page/component graph.
+(globalThis as typeof globalThis & { __APP_VERSION__?: string }).__APP_VERSION__ ??= "test";
+
+const {
     createCanvasImageRecoveryAction,
     createCanvasImageSubmissionHandlers,
     prepareImageGenerationSubmission,
-    type CanvasImageRecoveryOutcome,
-} from "./canvas-image-recovery-actions";
-import { canvasProjectImageActionFactories } from "@/pages/canvas/project";
-import { errorContentRetryLabel } from "@/components/canvas/nodes/builtin-nodes";
-import { hoverToolbarRetryLabel } from "@/components/canvas/canvas-node-hover-toolbar";
+} = await import("./canvas-image-recovery-actions");
+type CanvasImageRecoveryOutcome = import("./canvas-image-recovery-actions").CanvasImageRecoveryOutcome;
+const { canvasProjectImageActionFactories } = await import("@/pages/canvas/project");
+const { errorContentRetryLabel } = await import("@/components/canvas/nodes/builtin-nodes");
+const { hoverToolbarRetryLabel } = await import("@/components/canvas/canvas-node-hover-toolbar");
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 
 const taskKeys = ["taskId", "taskContentIndex", "taskRecoverable", "taskApiMode", "taskModel", "taskGroup", "taskChannelId", "taskBaseUrl"] as const;
