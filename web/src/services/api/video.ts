@@ -67,7 +67,9 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
 export async function pollVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     if (task.provider === "plugin") {
         const result = pluginVideoResults.get(task.id);
-        return result ? { status: "completed", result } : { status: "failed", error: "插件视频任务已失效，请重新生成" };
+        if (!result) return { status: "failed", error: "插件视频任务已失效，请重新生成" };
+        pluginVideoResults.delete(task.id);
+        return { status: "completed", result };
     }
     const requestConfig = resolveModelRequestConfig(config, task.model);
     assertVideoConfig(requestConfig, requestConfig.model);

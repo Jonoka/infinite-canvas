@@ -46,6 +46,7 @@ import { createCanvasProjectRestoreGuard } from "@/lib/canvas/canvas-project-res
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { createCanvasImageActions } from "@/pages/canvas/canvas-image-actions";
+import { commitCanvasVideoResultIfCurrent } from "@/lib/canvas/canvas-generation-request-guard";
 import { createImageWorkbenchActions } from "@/pages/image/image-generation-actions";
 import { confirmLiteToProFallback } from "@/lib/lite-pro-fallback-consent";
 import { buildNodeMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -2402,6 +2403,7 @@ function InfiniteCanvasPage() {
                         const video = await storeGeneratedVideo(
                             await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }),
                         );
+                        if (!commitCanvasVideoResultIfCurrent({ isCurrentRequest: isCurrentRun, result: video, commit: () => undefined })) return;
                         const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                         setNodes((prev) =>
                             prev.map((node) =>

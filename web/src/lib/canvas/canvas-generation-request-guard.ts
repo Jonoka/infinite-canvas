@@ -15,3 +15,9 @@ export const createCanvasGenerationRequestGuard = (
     const active = requests.get(nodeId);
     return !controller.signal.aborted && getProjectInstance() === projectInstance && active?.controller === controller && active.token === requestToken && nodeExists(nodeId);
 };
+
+export function commitCanvasVideoResultIfCurrent<T>(input: { isCurrentRequest: () => boolean; result: T; commit: (result: T) => void }) {
+    if (!input.isCurrentRequest()) return false;
+    input.commit(input.result);
+    return true;
+}

@@ -21,7 +21,7 @@ import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } f
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
-import { freezeVideoRetrySnapshot } from "@/lib/video-retry-snapshot";
+import { freezeVideoRetrySnapshot, selectVideoLogRetrySnapshot } from "@/lib/video-retry-snapshot";
 
 type GeneratedVideo = {
     id: string;
@@ -231,7 +231,8 @@ export default function VideoPage() {
     };
 
     const retryResult = () => {
-        const snapshot = retrySnapshotRef.current;
+        const historical = previewLog ? selectVideoLogRetrySnapshot(previewLog) : null;
+        const snapshot = historical ? { ...historical, config: buildVideoConfig({ ...effectiveConfig, ...historical.config }, String(historical.config.videoModel || previewLog?.model || model)) } : retrySnapshotRef.current;
         if (snapshot) {
             setPrompt(snapshot.text);
             setReferences(snapshot.references);

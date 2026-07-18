@@ -15,3 +15,7 @@ export function freezeVideoRetrySnapshot<T extends { config: unknown; references
     };
     return clone({ ...input, references: input.references || [], videoReferences: input.videoReferences || [], audioReferences: input.audioReferences || [] }) as T;
 }
+
+export function selectVideoLogRetrySnapshot(log: { prompt: string; config: Record<string, unknown>; references?: unknown[]; videoReferences?: unknown[]; audioReferences?: unknown[] }) {
+    return freezeVideoRetrySnapshot({ text: log.prompt, config: log.config, references: log.references || [], videoReferences: log.videoReferences || [], audioReferences: log.audioReferences || [] });
+}
