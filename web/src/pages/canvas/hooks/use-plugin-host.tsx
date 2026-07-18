@@ -15,6 +15,13 @@ import type { CanvasConnection, CanvasNodeData, ViewportTransform } from "@/type
 
 type CanvasTheme = (typeof canvasThemes)[keyof typeof canvasThemes];
 
+export function createPluginImageActions(dependencies: { request: (prompt: string, config: AiConfig) => Promise<string> }) {
+    return {
+        paidFallbackPolicy: "none" as const,
+        generateImage: (config: AiConfig, prompt: string) => dependencies.request(prompt, config),
+    };
+}
+
 type PluginHostParams = {
     effectiveConfig: AiConfig;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;

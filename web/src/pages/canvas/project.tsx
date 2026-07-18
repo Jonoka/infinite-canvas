@@ -45,6 +45,9 @@ import { createCanvasGenerationRequestGuard } from "@/lib/canvas/canvas-generati
 import { createCanvasProjectRestoreGuard } from "@/lib/canvas/canvas-project-restore-guard";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
+import { createCanvasImageActions } from "@/pages/canvas/canvas-image-actions";
+import { createImageWorkbenchActions } from "@/pages/image/image-generation-actions";
+import { confirmLiteToProFallback } from "@/lib/lite-pro-fallback-consent";
 import { buildNodeMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
@@ -89,6 +92,15 @@ import {
     type ViewportTransform,
 } from "@/types/canvas";
 import type { ReferenceImage } from "@/types/image";
+
+export const canvasProjectPaidFallbackWiring = {
+    mask: createCanvasImageActions,
+    angle: createCanvasImageActions,
+    "plugin-panel": createCanvasImageActions,
+    batch: createCanvasImageActions,
+    "node-retry": createCanvasImageActions,
+    confirm: confirmLiteToProFallback,
+};
 import type { ReferenceAudio } from "@/types/media";
 
 // 内置节点注册到统一注册表(模块加载时执行一次)
@@ -1794,7 +1806,16 @@ function InfiniteCanvasPage() {
             const controller = startGenerationRequest(childId, node.id, childId);
             const isCurrentRequest = generationRequestGuard(childId, controller);
             try {
-                const image = await requestEdit(generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) }).then((items) => items[0]);
+                const initial = await requestEdit(generationConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) })
+                    .then((items) => ({ status: "fulfilled", value: items[0] }) as PromiseFulfilledResult<{ id: string; dataUrl: string }>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
+                const [outcome] = await createImageWorkbenchActions({
+                    request: (_requestPrompt, requestConfig) => {
+                        if (controller.signal.aborted || !isCurrentRequest()) throw new DOMException("Aborted", "AbortError");
+                        return requestEdit(requestConfig, prompt, [source], { id: `${node.id}-mask`, name: "mask.png", type: "image/png", dataUrl: payload.maskDataUrl }, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) }).then((items) => items[0]);
+                    },
+                }).generateBatch(generationConfig, [prompt], [initial]);
+                if (outcome.status === "rejected") throw outcome.reason;
+                const image = outcome.value;
                 if (!isCurrentRequest()) return;
                 const uploaded = await uploadImage(image.dataUrl);
                 if (!isCurrentRequest()) return;
@@ -1875,14 +1896,29 @@ function InfiniteCanvasPage() {
             setDialogNodeId(childId);
             const controller = startGenerationRequest(childId, node.id, childId);
             const isCurrentRequest = generationRequestGuard(childId, controller);
+            const angleSource = { id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey };
             try {
-                const image = await requestEdit(
+                const initial = await requestEdit(
                     generationConfig,
                     prompt,
-                    [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }],
+                    [angleSource],
                     undefined,
                     { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) },
-                ).then((items) => items[0]);
+                ).then((items) => ({ status: "fulfilled", value: items[0] }) as PromiseFulfilledResult<{ id: string; dataUrl: string }>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
+                const [outcome] = await createImageWorkbenchActions({
+                    request: (_requestPrompt, requestConfig) => {
+                        if (controller.signal.aborted || !isCurrentRequest()) throw new DOMException("Aborted", "AbortError");
+                        return requestEdit(
+                            requestConfig,
+                            prompt,
+                            [angleSource],
+                            undefined,
+                            { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(childId, isCurrentRequest) },
+                        ).then((items) => items[0]);
+                    },
+                }).generateBatch(generationConfig, [prompt], [initial]);
+                if (outcome.status === "rejected") throw outcome.reason;
+                const image = outcome.value;
                 if (!isCurrentRequest()) return;
                 const uploaded = await uploadImage(image.dataUrl);
                 if (!isCurrentRequest()) return;
@@ -2075,9 +2111,20 @@ function InfiniteCanvasPage() {
                             ? [{ id: up.id, name: `${up.title || up.id}.png`, type: up.metadata.mimeType || "image/png", dataUrl: up.metadata.content, storageKey: up.metadata.storageKey }]
                             : [],
                     );
-                    const image = refs.length
-                        ? await requestEdit({ ...generationConfig, count: "1" }, fullPrompt, refs, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(nodeId, isCurrentRequest) }).then((items) => items[0])
-                        : await requestGeneration({ ...generationConfig, count: "1" }, fullPrompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(nodeId, isCurrentRequest) }).then((items) => items[0]);
+                    const requestPanelImage = (requestConfig: typeof generationConfig) => {
+                        if (controller.signal.aborted || !isCurrentRequest()) throw new DOMException("Aborted", "AbortError");
+                        return refs.length
+                            ? requestEdit({ ...requestConfig, count: "1" }, fullPrompt, refs, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(nodeId, isCurrentRequest) }).then((items) => items[0])
+                            : requestGeneration({ ...requestConfig, count: "1" }, fullPrompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(nodeId, isCurrentRequest) }).then((items) => items[0]);
+                    };
+                    const initial = await (refs.length
+                        ? requestEdit({ ...generationConfig, count: "1" }, fullPrompt, refs, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(nodeId, isCurrentRequest) }).then((items) => items[0])
+                        : requestGeneration({ ...generationConfig, count: "1" }, fullPrompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(nodeId, isCurrentRequest) }).then((items) => items[0]))
+                        .then((value) => ({ status: "fulfilled", value }) as PromiseFulfilledResult<{ id: string; dataUrl: string }>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
+                    const [outcome] = await createImageWorkbenchActions({ request: (_requestPrompt, requestConfig) => requestPanelImage(requestConfig) })
+                        .generateBatch(generationConfig, [fullPrompt], [initial]);
+                    if (outcome.status === "rejected") throw outcome.reason;
+                    const image = outcome.value;
                     if (!isCurrentRequest()) return;
                     const uploaded = await uploadImage(image.dataUrl);
                     if (!isCurrentRequest()) return;
@@ -2220,75 +2267,77 @@ function InfiniteCanvasPage() {
 
                     const controller = runController;
                     targetIds.forEach((targetId) => startGenerationRequest(targetId, nodeId, nodeId, controller));
+                    const targetRequestGuards = new Map(targetIds.map((targetId) => [targetId, generationRequestGuard(targetId, controller)]));
                     if (count > 1) startGenerationRequest(rootId, nodeId, nodeId, controller);
                     isCurrentRun = generationRequestGuard(count > 1 ? rootId : targetIds[0], controller);
                     let hasSuccess = false;
                     let hasFailure = false;
                     let hasStaleRequest = false;
-                    await Promise.all(
-                        targetIds.map(async (targetId) => {
-                            const isCurrentRequest = generationRequestGuard(targetId, controller);
-                            try {
-                                const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(targetId, isCurrentRequest) }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(targetId, isCurrentRequest) }).then((items) => items[0]);
-                                if (!isCurrentRequest()) {
-                                    hasStaleRequest = true;
-                                    return false;
-                                }
-                                const uploaded = await uploadImage(image.dataUrl);
-                                if (!isCurrentRequest()) {
-                                    hasStaleRequest = true;
-                                    return false;
-                                }
-                                const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
-                                if (!isCurrentRequest()) {
-                                    hasStaleRequest = true;
-                                    return false;
-                                }
-                                setNodes((prev) => {
-                                    const root = prev.find((node) => node.id === rootId);
-                                    return prev.map((node) => {
-                                        if (node.id !== targetId && node.id !== rootId) return node;
-                                        const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
-                                        if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId))
-                                            return {
-                                                ...node,
-                                                position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
-                                                width: imageSize.width,
-                                                height: imageSize.height,
-                                                metadata: { ...node.metadata, ...imageMetadata(uploaded), primaryImageId: targetId },
-                                            };
-                                        if (node.id === targetId)
-                                            return {
-                                                ...node,
-                                                position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
-                                                width: imageSize.width,
-                                                height: imageSize.height,
-                                                metadata: { ...node.metadata, ...imageMetadata(uploaded) },
-                                            };
-                                        return node;
-                                    });
-                                });
-                                hasSuccess = true;
-                                if (isConfigNode) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
-                                return true;
-                            } catch (error) {
-                                if (!isCurrentRequest()) {
-                                    hasStaleRequest = true;
-                                    return false;
-                                }
-                                if (isGenerationCanceled(error)) return false;
-                                const errorDetails = error instanceof Error ? error.message : "生成失败";
-                                hasFailure = true;
-                                setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
-                            } finally {
-                                if (!isCurrentRequest()) hasStaleRequest = true;
-                                finishGenerationRequest(targetId, controller);
-                            }
-                            return false;
-                        }),
-                    );
+                    const runTarget = async (targetId: string, requestConfig: typeof generationConfig, initial = false) => {
+                        const isCurrentRequest = targetRequestGuards.get(targetId)!;
+                        if (!initial && (controller.signal.aborted || !isCurrentRequest())) throw new DOMException("Aborted", "AbortError");
+                        const image = referenceImages.length
+                            ? await requestEdit({ ...(initial ? generationConfig : requestConfig), count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(targetId, isCurrentRequest) }).then((items) => items[0])
+                            : initial
+                              ? await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(targetId, isCurrentRequest) }).then((items) => items[0])
+                              : await requestGeneration({ ...requestConfig, count: "1" }, effectivePrompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(targetId, isCurrentRequest) }).then((items) => items[0]);
+                        if (!isCurrentRequest()) {
+                            hasStaleRequest = true;
+                            throw new DOMException("Aborted", "AbortError");
+                        }
+                        const uploaded = await uploadImage(image.dataUrl);
+                        if (!isCurrentRequest()) {
+                            hasStaleRequest = true;
+                            throw new DOMException("Aborted", "AbortError");
+                        }
+                        const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
+                        if (!isCurrentRequest()) {
+                            hasStaleRequest = true;
+                            throw new DOMException("Aborted", "AbortError");
+                        }
+                        setNodes((prev) => {
+                            const root = prev.find((node) => node.id === rootId);
+                            return prev.map((node) => {
+                                if (node.id !== targetId && node.id !== rootId) return node;
+                                const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
+                                if (node.id === rootId && (targetId === rootId || !root?.metadata?.primaryImageId))
+                                    return {
+                                        ...node,
+                                        position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
+                                        width: imageSize.width,
+                                        height: imageSize.height,
+                                        metadata: { ...node.metadata, ...imageMetadata(uploaded), primaryImageId: targetId },
+                                    };
+                                if (node.id === targetId)
+                                    return {
+                                        ...node,
+                                        position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
+                                        width: imageSize.width,
+                                        height: imageSize.height,
+                                        metadata: { ...node.metadata, ...imageMetadata(uploaded) },
+                                    };
+                                return node;
+                            });
+                        });
+                        if (isConfigNode) setNodes((prev) => prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)));
+                        return true;
+                    };
+                    const initialResults = await Promise.allSettled(targetIds.map(async (targetId) => runTarget(targetId, generationConfig, true)));
+                    const outcomes = await createImageWorkbenchActions({
+                        request: (_requestPrompt, requestConfig, index = 0) => runTarget(targetIds[index], requestConfig),
+                    }).generateBatch(generationConfig, targetIds.map(() => effectivePrompt), initialResults);
+                    outcomes.forEach((outcome, index) => {
+                        const targetId = targetIds[index];
+                        const isCurrentRequest = targetRequestGuards.get(targetId)!;
+                        if (outcome.status === "fulfilled") hasSuccess = true;
+                        else if (!isCurrentRequest()) hasStaleRequest = true;
+                        else if (!isGenerationCanceled(outcome.reason)) {
+                            const errorDetails = outcome.reason instanceof Error ? outcome.reason.message : "生成失败";
+                            hasFailure = true;
+                            setNodes((prev) => prev.map((node) => (node.id === targetId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_ERROR, errorDetails } } : node)));
+                        }
+                        finishGenerationRequest(targetId, controller);
+                    });
                     const currentRun = isCurrentRun();
                     if (count > 1) finishGenerationRequest(rootId, controller);
                     isCurrentRun = () => currentRun;
@@ -2613,9 +2662,20 @@ function InfiniteCanvasPage() {
                     return;
                 }
 
-                const image = useReferenceImages
-                    ? await requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(node.id, isCurrentRequest) }).then((items) => items[0])
-                    : await requestGeneration(generationConfig, prompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(node.id, isCurrentRequest) }).then((items) => items[0]);
+                const initial = await (useReferenceImages
+                    ? requestEdit(generationConfig, prompt, retryImages, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(node.id, isCurrentRequest) }).then((items) => items[0])
+                    : requestGeneration(generationConfig, prompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(node.id, isCurrentRequest) }).then((items) => items[0]))
+                    .then((value) => ({ status: "fulfilled", value }) as PromiseFulfilledResult<{ id: string; dataUrl: string }>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
+                const requestRetryImage = (requestConfig: typeof generationConfig) => {
+                    if (controller.signal.aborted || !isCurrentRequest()) throw new DOMException("Aborted", "AbortError");
+                    return useReferenceImages
+                        ? requestEdit(requestConfig, prompt, retryImages, undefined, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(node.id, isCurrentRequest) }).then((items) => items[0])
+                        : requestGeneration(requestConfig, prompt, { signal: controller.signal, onTaskAccepted: imageTaskAcceptance(node.id, isCurrentRequest) }).then((items) => items[0]);
+                };
+                const [outcome] = await createImageWorkbenchActions({ request: (_requestPrompt, requestConfig) => requestRetryImage(requestConfig) })
+                    .generateBatch(generationConfig, [prompt], [initial]);
+                if (outcome.status === "rejected") throw outcome.reason;
+                const image = outcome.value;
                 if (!isCurrentRequest()) return;
                 const uploadedImage = await uploadImage(image.dataUrl);
                 if (!isCurrentRequest()) return;

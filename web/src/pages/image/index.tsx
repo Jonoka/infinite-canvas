@@ -15,6 +15,8 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
+import { createImageWorkbenchActions } from "./image-generation-actions";
+import { confirmLiteToProFallback } from "@/lib/lite-pro-fallback-consent";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -65,6 +67,11 @@ type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => 
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
 const RESULT_ACTION_BUTTON_CLASS = "min-w-0 px-1.5 [&_.ant-btn-icon]:shrink-0 [&>span:last-child]:min-w-0 [&>span:last-child]:truncate";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+
+export const imageWorkbenchPaidFallbackWiring = {
+    createActions: createImageWorkbenchActions,
+    confirm: confirmLiteToProFallback,
+};
 
 export default function ImagePage() {
     const { message } = App.useApp();
@@ -162,9 +169,11 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
-        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
-
-        const result = await Promise.allSettled(tasks);
+        const prompts = Array.from({ length: generationCount }, () => snapshot.text);
+        const initialResults = await Promise.allSettled(Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot)));
+        const result = await createImageWorkbenchActions({
+            request: (_prompt, requestConfig, index = 0) => runGenerationSlot(index, { ...snapshot, config: requestConfig }),
+        }).generateBatch(snapshot.config, prompts, initialResults);
         const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
         const successCount = successImages.length;
         const failCount = generationCount - successCount;
@@ -323,7 +332,13 @@ export default function ImagePage() {
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
         const retryStartedAt = performance.now();
         try {
-            const image = await runGenerationSlot(index, snapshot);
+            const initial = await runGenerationSlot(index, snapshot)
+                .then((value) => ({ status: "fulfilled", value }) as PromiseFulfilledResult<GeneratedImage>, (reason) => ({ status: "rejected", reason }) as PromiseRejectedResult);
+            const outcome = await createImageWorkbenchActions({
+                request: (_prompt, requestConfig) => runGenerationSlot(index, { ...snapshot, config: requestConfig }),
+            }).retrySlot(snapshot.config, snapshot.text, initial);
+            if (outcome.status === "rejected") throw outcome.reason;
+            const image = outcome.value;
             const stored = await uploadImage(image.dataUrl);
             const logImage = { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { image: { ...image, dataUrl: stored.url, storageKey: stored.storageKey } }));
