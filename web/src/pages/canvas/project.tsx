@@ -45,6 +45,8 @@ import { createCanvasGenerationRequestGuard } from "@/lib/canvas/canvas-generati
 import { createCanvasProjectRestoreGuard } from "@/lib/canvas/canvas-project-restore-guard";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
+import { createCanvasImageActions } from "@/pages/canvas/canvas-image-actions";
+import { confirmLiteToProFallback } from "@/lib/lite-pro-fallback-consent";
 import { buildNodeMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
@@ -89,6 +91,15 @@ import {
     type ViewportTransform,
 } from "@/types/canvas";
 import type { ReferenceImage } from "@/types/image";
+
+export const canvasProjectPaidFallbackWiring = {
+    mask: createCanvasImageActions,
+    angle: createCanvasImageActions,
+    "plugin-panel": createCanvasImageActions,
+    batch: createCanvasImageActions,
+    "node-retry": createCanvasImageActions,
+    confirm: confirmLiteToProFallback,
+};
 import type { ReferenceAudio } from "@/types/media";
 
 // 内置节点注册到统一注册表(模块加载时执行一次)

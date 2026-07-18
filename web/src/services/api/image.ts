@@ -107,7 +107,11 @@ export type ImageTaskAcceptance = {
     baseUrl: string;
     recoverable: boolean;
 };
-export type RequestOptions = { signal?: AbortSignal; onTaskAccepted?: (task: ImageTaskAcceptance) => void | Promise<void> };
+export type RequestOptions = {
+    signal?: AbortSignal;
+    onTaskAccepted?: (task: ImageTaskAcceptance) => void | Promise<void>;
+    transport?: (request: { url: string; method: string; body: unknown }) => Promise<unknown>;
+};
 type ImageResult = { id: string; dataUrl: string };
 
 export class ImageRequestError extends Error {
@@ -337,6 +341,14 @@ function upstreamImageTaskError(payload: unknown, fallback: string) {
         ? nested.code
         : typeof value.code === "string" || typeof value.code === "number" ? value.code : undefined;
     return new ImageRequestError(stringValue(nested?.message) || stringValue(value.msg) || fallback, code);
+}
+
+export const imageRequestErrorFromPayload = upstreamImageTaskError;
+
+function resolveImageRequestConfig(config: AiConfig, override: Partial<Pick<AiConfig, "model" | "group" | "quality" | "size" | "count">> = {}) {
+    const selected = (config.imageModel || config.model).trim();
+    const resolved = resolveModelRequestConfig(config, selected);
+    return { ...resolved, ...override, model: override.model || resolved.model, imageModel: override.model || resolved.model };
 }
 
 function imageTaskErrorEnvelope(payload: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -1063,7 +1075,7 @@ function buildEditFormData(config: AiConfig, prompt: string) {
 export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions): Promise<ImageResult[]> {
     const selectedModel = (config.imageModel || config.model).trim();
     assertModelCapability(config, selectedModel, "image", "图像");
-    const requestConfig = resolveModelRequestConfig(config, selectedModel);
+    const requestConfig = resolveImageRequestConfig(config, { group: config.group, quality: config.quality, size: config.size, count: config.count });
     assertAiConfig(requestConfig, requestConfig.model, "图像");
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, selectedModel);
@@ -1095,14 +1107,14 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
         }
     }
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            buildGenerationRequestBody({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, background: config.background }, prompt),
-            {
+        const url = aiApiUrl(requestConfig, "/images/generations");
+        const body = buildGenerationRequestBody({ ...requestConfig, count: config.count, quality: config.quality, size: config.size, background: config.background }, prompt);
+        const payload = options?.transport
+            ? await options.transport({ url, method: "POST", body })
+            : (await axios.post<ImageApiResponse>(url, body, {
                 ...aiRequestOptions(requestConfig, { headers: { "Content-Type": "application/json" }, signal: options?.signal }),
-            },
-        );
-        const images = await resolveImageSubmission(requestConfig, "generation", response.data, options);
+            })).data;
+        const images = await resolveImageSubmission(requestConfig, "generation", payload as ImageApiResponse, options);
         return images;
     } catch (error) {
         if (error instanceof ImageRequestError) throw error;
@@ -1114,7 +1126,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions): Promise<ImageResult[]> {
     const selectedModel = (config.imageModel || config.model).trim();
     assertModelCapability(config, selectedModel, "image", "图像");
-    const requestConfig = resolveModelRequestConfig(config, selectedModel);
+    const requestConfig = resolveImageRequestConfig(config, { group: config.group, quality: config.quality, size: config.size, count: config.count });
     assertAiConfig(requestConfig, requestConfig.model, "图像");
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
@@ -1154,8 +1166,11 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (mask) formData.set("mask", dataUrlToFile(mask));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, aiRequestOptions(requestConfig, { signal: options?.signal }));
-        const images = await resolveImageSubmission(requestConfig, "edit", response.data, options);
+        const url = aiApiUrl(requestConfig, "/images/edits");
+        const payload = options?.transport
+            ? await options.transport({ url, method: "POST", body: formData })
+            : (await axios.post<ImageApiResponse>(url, formData, aiRequestOptions(requestConfig, { signal: options?.signal }))).data;
+        const images = await resolveImageSubmission(requestConfig, "edit", payload as ImageApiResponse, options);
         return images;
     } catch (error) {
         if (error instanceof ImageRequestError) throw error;
@@ -1250,5 +1265,5 @@ export const __test__ = {
     extractAcceptedImageTask, notifyAcceptedImageTask, classifyImageTaskStatus, unwrapImageTaskStatus,
     parseCompletedImageTask, buildImageTaskStatusPath, buildImageTaskContentPath,
     validateImageTaskContent, upstreamImageTaskError, buildImageContentFetchRequest, resolveSubmittedImageTask, resolveImageSubmission,
-    fetchImageTaskContent, pollImageTask, recoverImageTask: recoverImageTaskWithResolvers, normalizedProvenanceBaseUrl, disposableAbortSignal,
+    fetchImageTaskContent, pollImageTask, recoverImageTask: recoverImageTaskWithResolvers, normalizedProvenanceBaseUrl, disposableAbortSignal, resolveImageRequestConfig,
 };
