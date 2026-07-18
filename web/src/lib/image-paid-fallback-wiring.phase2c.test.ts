@@ -53,6 +53,7 @@ describe("Phase 2C production action/factory wiring", () => {
         const output: Result[] = operation === "batch" ? await actions.generateBatch(lite, ["a", "b"]) : [await actions.retrySlot(lite, "a")];
         expect(d.prompts).toBe(1);
         expect(d.calls.filter((call) => call.config.model.includes("pro"))).toHaveLength(output.length);
+        if (operation === "batch") expect(d.calls.filter((call) => call.config.model.includes("pro")).map((call) => String(call.config.count))).toEqual(["1", "1"]);
         expect(output.every((item) => item.status === "fulfilled")).toBe(true);
     });
 
