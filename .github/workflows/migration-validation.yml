@@ -41,6 +41,11 @@ jobs:
         # the Rollup version already locked by Vite.
         run: npm install --no-save --ignore-scripts --legacy-peer-deps @rollup/rollup-linux-x64-gnu@4.62.2
 
+      - name: Install Lightning CSS native binary workaround
+        # npm/cli#4828 can omit platform optional dependencies from a lockfile
+        # generated on another platform. Keep this version tied to the locked package.
+        run: npm install --no-save --ignore-scripts --legacy-peer-deps lightningcss-linux-x64-gnu@1.32.0
+
       - name: Typecheck
         run: npm run typecheck
 
