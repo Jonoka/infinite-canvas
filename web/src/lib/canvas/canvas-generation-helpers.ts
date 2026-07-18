@@ -7,7 +7,7 @@ import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-p
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import type { ReferenceImage } from "@/types/image";
 import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
-import { normalizeVideoReferences, type VideoReference } from "@/lib/canvas/video-reference-normalization";
+import { normalizeVideoReferences } from "@/lib/canvas/video-reference-normalization";
 
 export function imageExtension(dataUrl: string) {
     return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
@@ -35,7 +35,7 @@ export function generationVideoReferences(context: { referenceImages: ReferenceI
         ...context.referenceImages.map((item) => ({ kind: "image" as const, url: referenceUrl(item) || "", role: (item as ReferenceImage & { role?: string }).role, component: (item as ReferenceImage & { component?: string }).component, order: (item as ReferenceImage & { order?: number }).order })),
         ...context.referenceVideos.map((item) => ({ kind: "video" as const, url: item.storageKey || item.url || "", role: item.role || "reference_video", component: item.component, order: item.order })),
         ...(context.referenceAudios || []).map((item) => ({ kind: "audio" as const, url: item.storageKey || item.url || "", role: item.role || "reference_audio", component: item.component, order: item.order })),
-    ].filter((item): item is VideoReference => Boolean(item.url)));
+    ].filter((item) => Boolean(item.url)));
 }
 
 export async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {

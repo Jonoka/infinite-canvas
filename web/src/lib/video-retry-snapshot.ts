@@ -6,7 +6,7 @@ export type VideoRetrySnapshot<TPrompt = string, TConfig = Record<string, unknow
     audioReferences: TReference[];
 };
 
-export function freezeVideoRetrySnapshot<T extends { prompt: unknown; config: unknown; references?: unknown[]; videoReferences?: unknown[]; audioReferences?: unknown[] }>(input: T): T {
+export function freezeVideoRetrySnapshot<T extends { config: unknown; references?: unknown[]; videoReferences?: unknown[]; audioReferences?: unknown[] } & ({ prompt: unknown } | { text: unknown })>(input: T): T {
     const clone = (value: unknown): unknown => {
         if (typeof structuredClone === "function") return structuredClone(value);
         if (Array.isArray(value)) return value.map(clone);

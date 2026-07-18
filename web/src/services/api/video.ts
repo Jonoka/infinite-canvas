@@ -279,10 +279,12 @@ async function buildSeedanceContent(config: AiConfig, prompt: string, references
         media.push({ order: reference.order, content: item });
     }
     for (const video of videoReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.videos)) {
-        media.push({ order: (video as ReferenceVideo & { order?: number }).order, content: { type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: video.role || "reference_video", ...(video.component ? { component: video.component } : {}) } });
+        const reference = video as ReferenceVideo & { order?: number; role?: string; component?: string };
+        media.push({ order: reference.order, content: { type: "video_url", video_url: { url: await resolveSeedanceVideoUrl(video) }, role: reference.role || "reference_video", ...(reference.component ? { component: reference.component } : {}) } });
     }
     for (const audio of audioReferences.slice(0, SEEDANCE_REFERENCE_LIMITS.audios)) {
-        media.push({ order: (audio as ReferenceAudio & { order?: number }).order, content: { type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: audio.role || "reference_audio", ...(audio.component ? { component: audio.component } : {}) } });
+        const reference = audio as ReferenceAudio & { order?: number; role?: string; component?: string };
+        media.push({ order: reference.order, content: { type: "audio_url", audio_url: { url: await resolveSeedanceAudioUrl(audio) }, role: reference.role || "reference_audio", ...(reference.component ? { component: reference.component } : {}) } });
     }
     media.sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
     content.push(...media.map((item) => item.content));
