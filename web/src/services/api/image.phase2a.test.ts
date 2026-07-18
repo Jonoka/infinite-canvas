@@ -72,7 +72,7 @@ describe("Phase 2A model discovery normalization", () => {
         expect(hooks!.normalizeDiscoveredModelNames([" flux-1 ", 3, "", "flux-1", null, " gpt-5.5 "])).toEqual(["flux-1", "gpt-5.5"]);
     });
 
-    test.each([{}, "models", null, []])("rejects malformed or valid-empty discovery payload %#", (payload) => {
+    test.each([[{}], ["models"], [null], [[]]])("rejects malformed or valid-empty discovery payload %#", (payload) => {
         expect(() => hooks!.normalizeDiscoveredModelNames(payload)).toThrow(/模型列表/);
     });
 });
