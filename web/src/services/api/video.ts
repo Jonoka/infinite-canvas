@@ -25,7 +25,7 @@ type SeedanceTask = {
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal };
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
+export type VideoGenerationResult = { blob?: Blob; url?: string; urls?: string[]; mimeType?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "seedance" | "plugin"; model: string };
 export type VideoGenerationTaskState = { status: "pending" } | { status: "completed"; result: VideoGenerationResult } | { status: "failed"; error: string };
 
@@ -102,25 +102,54 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
 }
 
 function videoPluginResult(result: unknown): VideoGenerationResult {
-    if (Array.isArray(result)) {
-        for (const item of result) {
-            try {
-                return videoPluginResult(item);
-            } catch {
-                // Continue to the first item containing a completed video result.
-            }
-        }
-    }
     if (result instanceof Blob) return { blob: result };
-    if (typeof result === "string" && result.trim()) return { url: result, mimeType: "video/mp4" };
-    if (result && typeof result === "object") {
-        const value = result as { status?: unknown; url?: unknown; video_url?: unknown; result_url?: unknown };
-        const status = typeof value.status === "string" ? value.status.toLowerCase() : "";
-        if (["pending", "queued", "running", "processing", "in_progress"].includes(status)) throw new Error("插件尚未返回可用的视频结果");
-        const url = value.url ?? value.video_url ?? value.result_url;
-        if (typeof url === "string" && url.trim()) return { url, mimeType: "video/mp4" };
-    }
+    const urls: string[] = [];
+    collectVideoPluginUrls(result, urls, new Set());
+    if (urls.length) return { url: urls[0], urls, mimeType: "video/mp4" };
+    if (hasPendingVideoPluginResult(result, new Set())) throw new Error("插件尚未返回可用的视频结果");
     throw new Error("模型调用脚本没有返回可用的视频结果");
+}
+
+function collectVideoPluginUrls(value: unknown, urls: string[], seen: Set<object>) {
+    if (typeof value === "string") {
+        const url = value.trim();
+        if (isValidVideoPluginUrl(url)) urls.push(url);
+        return;
+    }
+    if (!value || typeof value !== "object" || value instanceof Blob || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+        value.forEach((item) => collectVideoPluginUrls(item, urls, seen));
+        return;
+    }
+    const object = value as Record<string, unknown>;
+    const status = typeof object.status === "string" ? object.status.toLowerCase() : "";
+    if (["pending", "queued", "running", "processing", "in_progress"].includes(status)) return;
+    for (const key of ["url", "video_url", "result_url"]) {
+        if (key in object) collectVideoPluginUrls(object[key], urls, seen);
+    }
+    for (const key of ["urls", "result_urls", "videos", "results", "data"]) {
+        if (key in object) collectVideoPluginUrls(object[key], urls, seen);
+    }
+}
+
+function isValidVideoPluginUrl(value: string) {
+    try {
+        const protocol = new URL(value).protocol;
+        return ["http:", "https:", "blob:", "data:", "asset:"].includes(protocol);
+    } catch {
+        return false;
+    }
+}
+
+function hasPendingVideoPluginResult(value: unknown, seen: Set<object>): boolean {
+    if (!value || typeof value !== "object" || value instanceof Blob || seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) return value.some((item) => hasPendingVideoPluginResult(item, seen));
+    const object = value as Record<string, unknown>;
+    const status = typeof object.status === "string" ? object.status.toLowerCase() : "";
+    return ["pending", "queued", "running", "processing", "in_progress"].includes(status)
+        || Object.entries(object).some(([key, item]) => key !== "status" && hasPendingVideoPluginResult(item, seen));
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
