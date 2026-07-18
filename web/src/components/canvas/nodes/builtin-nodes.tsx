@@ -3,6 +3,7 @@ import { FileText, Group, Image as ImageIcon, Music2, Settings2, Video } from "l
 import { NODE_SPECS } from "@/constant/canvas";
 import { registerNodeDefinitions } from "@/lib/canvas/node-registry";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { canvasNodeRetryLabel } from "@/lib/canvas/canvas-generation-helpers";
 import type { CanvasNodeDefinition, CanvasNodeResource } from "@/types/canvas-plugin";
 
 // 内置节点的可扩展元数据(尺寸/初始 metadata 复用 NODE_SPECS)。
@@ -16,6 +17,7 @@ function builtinResource(node: CanvasNodeData): CanvasNodeResource | null {
 }
 
 const iconClass = "size-5";
+export const errorContentRetryLabel = canvasNodeRetryLabel;
 
 const BUILTIN_DEFINITIONS: CanvasNodeDefinition[] = [
     { type: CanvasNodeType.Text, title: "文本", icon: <FileText className={iconClass} />, minimapColor: undefined, resource: builtinResource },

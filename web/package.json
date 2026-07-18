@@ -7,7 +7,7 @@
         "dev": "vite --host 0.0.0.0 --port 3000",
         "build": "vite build",
         "typecheck": "tsc --noEmit",
-        "test:protocol": "bun test src/services/api/ai-client.test.ts src/services/api/image.phase2a.test.ts src/stores/use-config-store.protocol.test.ts src/stores/use-config-store.phase2a.test.ts",
+        "test:protocol": "bun test src/services/api/ai-client.test.ts src/services/api/image.phase2a.test.ts src/services/api/image.phase2b.test.ts src/lib/canvas/canvas-image-recovery.phase2b.test.ts src/lib/canvas/canvas-generation-request-guard.phase2b.test.ts src/lib/canvas/canvas-project-restore-guard.phase2b.test.ts src/lib/canvas/canvas-ui-store.phase2b-integration.test.ts src/stores/canvas/use-canvas-store.phase2b-integration.test.ts src/stores/use-config-store.protocol.test.ts src/stores/use-config-store.phase2a.test.ts",
         "start": "vite preview --host 0.0.0.0 --port 3000",
         "format": "prettier --write .",
         "format:check": "prettier --check ."

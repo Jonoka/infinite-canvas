@@ -110,7 +110,84 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
 }
 
 export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
-    return nodes.map((node) => (node.metadata?.status === "loading" ? { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: "页面刷新后生成已中断，请重新生成。" } } : node));
+    return resetInterruptedImageGeneration(nodes);
+}
+
+const imageTaskRecoveryKeys = ["taskId", "taskContentIndex", "taskRecoverable", "taskApiMode", "taskModel", "taskGroup", "taskChannelId", "taskBaseUrl"] as const;
+type ImageTaskRecoveryKey = typeof imageTaskRecoveryKeys[number];
+type ImageTaskRecoveryMetadata = Pick<CanvasNodeMetadata, ImageTaskRecoveryKey>;
+type ImageTaskRequest = { method: "GET" | "POST"; path: string };
+
+export function shouldRecoverImageTask(node: CanvasNodeData) {
+    const metadata = node.metadata;
+    return node.type === CanvasNodeType.Image && metadata?.status === "error" && metadata.taskRecoverable === true && metadata.taskApiMode === "newapi" && typeof metadata.taskId === "string" && Boolean(metadata.taskId.trim());
+}
+
+export function imageRetryActionLabel(node: CanvasNodeData) {
+    return shouldRecoverImageTask(node) ? "重新获取成品" : "重试";
+}
+
+export function canvasNodeRetryLabel(node: CanvasNodeData) {
+    return shouldRecoverImageTask(node)
+        ? { kind: "recover" as const, label: "重新获取成品" }
+        : { kind: "regenerate" as const, label: "重试" };
+}
+
+export function resetInterruptedImageGeneration(nodes: CanvasNodeData[]) {
+    return nodes.map((node) => {
+        if (node.metadata?.status !== "loading") return node;
+        const recoverable = node.type === CanvasNodeType.Image && node.metadata.taskRecoverable === true && node.metadata.taskApiMode === "newapi" && Boolean(node.metadata.taskId?.trim());
+        return { ...node, metadata: { ...node.metadata, status: "error" as const, errorDetails: recoverable ? "页面刷新后生成已中断，可重新获取成品。" : "页面刷新后生成已中断，请重新生成。" } };
+    });
+}
+
+export function clearImageTaskRecovery<T extends Partial<Record<ImageTaskRecoveryKey, unknown>>>(metadata: T): Omit<T, ImageTaskRecoveryKey> {
+    const result: Record<string, unknown> = { ...metadata };
+    for (const key of imageTaskRecoveryKeys) delete result[key];
+    return result as Omit<T, ImageTaskRecoveryKey>;
+}
+
+export function buildImageRetryPlan(node: CanvasNodeData): { kind: "recover" | "regenerate"; requests: ImageTaskRequest[] } {
+    if (!shouldRecoverImageTask(node)) return { kind: "regenerate", requests: [] };
+    const id = encodeURIComponent(node.metadata!.taskId!.trim());
+    const index = Number.isInteger(node.metadata!.taskContentIndex) && node.metadata!.taskContentIndex! >= 0 ? node.metadata!.taskContentIndex! : 0;
+    return { kind: "recover", requests: [{ method: "GET", path: `/images/tasks/${id}` }, { method: "GET", path: `/images/tasks/${id}/content/${index}` }] };
+}
+
+export function resolveImageTaskRecoveryConfig(input: { node: CanvasNodeData; currentConfig: AiConfig }): AiConfig {
+    const metadata = input.node.metadata;
+    if (!shouldRecoverImageTask(input.node) || !metadata?.taskBaseUrl || !metadata.taskChannelId || !metadata.taskModel) {
+        throw new Error("图片任务缺少可恢复的来源信息");
+    }
+    let provenance: URL;
+    try { provenance = new URL(metadata.taskBaseUrl.trim()); } catch { throw new Error("图片任务来源 URL 无效"); }
+    const credentialQuery = Array.from(provenance.searchParams.keys()).some((key) => /^(?:api[_-]?key|access[_-]?token|token|password|secret|authorization)$/i.test(key));
+    if (!["http:", "https:"].includes(provenance.protocol) || provenance.username || provenance.password || credentialQuery) throw new Error("图片任务来源 URL 包含无效协议或凭据");
+    const channel = input.currentConfig.channels.find((item) => item.id === metadata.taskChannelId);
+    if (!channel) throw new Error("图片任务原渠道已不存在，无法安全恢复凭据");
+    return {
+        ...input.currentConfig,
+        channelId: metadata.taskChannelId,
+        apiMode: metadata.taskApiMode!,
+        apiFormat: "openai",
+        baseUrl: provenance.toString().replace(/\/$/, ""),
+        apiKey: channel.apiKey,
+        model: metadata.taskModel,
+        imageModel: metadata.taskModel,
+        group: metadata.taskGroup || "",
+    };
+}
+
+export async function persistAcceptedImageTask(input: {
+    nodes: CanvasNodeData[];
+    nodeId: string;
+    acceptance: Required<ImageTaskRecoveryMetadata>;
+    writeNodes: (nodes: CanvasNodeData[]) => void | Promise<void>;
+    flush: () => Promise<void>;
+}) {
+    const nodes = input.nodes.map((node) => node.id === input.nodeId ? { ...node, metadata: { ...node.metadata, ...input.acceptance } } : node);
+    await input.writeNodes(nodes);
+    await input.flush();
 }
 
 export function isGenerationCanceled(error: unknown) {
@@ -157,3 +234,5 @@ export function buildAngleLabel(params: CanvasImageAngleParams) {
 export function buildAnglePrompt(params: CanvasImageAngleParams) {
     return `基于参考图重新生成同一主体的新视角，保持主体、颜色、材质和画面风格一致，不要只做透视变形。${buildAngleLabel(params)}。`;
 }
+
+export const __test__ = { shouldRecoverImageTask, imageRetryActionLabel, resetInterruptedImageGeneration, clearImageTaskRecovery, buildImageRetryPlan, persistAcceptedImageTask, resolveImageTaskRecoveryConfig };
