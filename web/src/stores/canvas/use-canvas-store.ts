@@ -108,7 +108,9 @@ type CanvasStorePersistence = {
 };
 
 export const canvasStorePersistence: CanvasStorePersistence = {
-    write: async (name: string, value: StorageValue<CanvasStore>): Promise<void> => localForageStorage.setItem(name, JSON.stringify(value)),
+    write: async (name: string, value: StorageValue<CanvasStore>): Promise<void> => {
+        await localForageStorage.setItem(name, JSON.stringify(value));
+    },
     read: async (name: string): Promise<StorageValue<CanvasStore> | null> => {
         const value = await localForageStorage.getItem(name);
         return value ? JSON.parse(value) as StorageValue<CanvasStore> : null;
