@@ -2629,9 +2629,10 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: "参考图片已丢失，无法继续重试" } } : item)));
                 return;
             }
-            const retryImages = videoRetryPlan
+            const retryImages = retryReferenceImages || [];
+            const videoRetryImages = videoRetryPlan
                 ? videoRetryPlan.references.map((reference, index) => ({ ...reference, id: `retry-image-${index}`, name: "reference.png", type: "image/png" }))
-                : retryReferenceImages || [];
+                : retryImages;
             const savedVideoReferences = (videoRetryPlan?.videoReferences || []).map((reference) => ({
                         id: `retry-${reference.url}`,
                         name: "reference.mp4",
@@ -2673,7 +2674,9 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, savedVideoReferences, savedAudioReferences, { signal: controller.signal }));
+                    const result = await requestVideoGeneration(generationConfig, prompt, videoRetryImages, savedVideoReferences, savedAudioReferences, { signal: controller.signal });
+                    if (!isCurrentRequest()) return;
+                    const video = await storeGeneratedVideo(result);
                     commitCanvasVideoResultIfCurrent({
                         isCurrentRequest,
                         result: video,

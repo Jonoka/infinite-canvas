@@ -46,8 +46,17 @@ function pluginUrl(config: AiConfig, path: string) {
 
 function pluginRequestOptions(config: AiConfig, path: string, options: AxiosRequestConfig): AxiosRequestConfig {
     const request = aiRequestOptions(config, options);
-    if (!/^https?:/i.test(path) || new URL(path).origin === new URL(config.baseUrl).origin) return request;
-    request.headers = Object.fromEntries(Object.entries(request.headers || {}).filter(([name]) => name.toLowerCase() !== "authorization"));
+    if (!/^https?:/i.test(path)) return request;
+    let isSameOrigin = false;
+    try {
+        isSameOrigin = new URL(path).origin === new URL(config.baseUrl).origin;
+    } catch {
+        isSameOrigin = false;
+    }
+    if (isSameOrigin) return request;
+    request.headers = Object.fromEntries(
+        Object.entries(request.headers || {}).filter(([name]) => !/^(?:authorization|x-api-key|x-goog-api-key|api-key)$/i.test(name)),
+    );
     return request;
 }
 
