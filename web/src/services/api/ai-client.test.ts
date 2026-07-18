@@ -27,7 +27,7 @@ describe("central AI protocol", () => {
         expect(aiHeaders(newapi)).toEqual({});
         const axios = aiRequestOptions(newapi, { headers: { authorization: "Bearer leaked", AUTHORIZATION: "also leaked", "X-Test": "ok" } });
         expect(axios.withCredentials).toBe(true);
-        expect(axios.headers).toEqual({ "X-Test": "ok" });
+        expect(axios.headers).toEqual({ "x-test": "ok" });
         const fetch = aiFetchOptions(newapi, { headers: { Authorization: "Bearer leaked", authorization: "also leaked", "X-Test": "ok" } });
         expect(fetch.credentials).toBe("include");
         expect(new Headers(fetch.headers).get("authorization")).toBeNull();
@@ -44,7 +44,7 @@ describe("central AI protocol", () => {
     test("normalizes AxiosHeaders for both request adapters", () => {
         const direct = config({ apiKey: "sk-test", apiMode: "direct" });
         const headers = new AxiosHeaders({ "X-Test": "ok", Authorization: "Bearer override" });
-        expect(aiRequestOptions(direct, { headers }).headers).toEqual({ Authorization: "Bearer override", "X-Test": "ok" });
+        expect(aiRequestOptions(direct, { headers }).headers).toEqual({ authorization: "Bearer override", "x-test": "ok" });
         expect(new Headers(aiFetchOptions(direct, { headers }).headers).get("x-test")).toBe("ok");
     });
 });
