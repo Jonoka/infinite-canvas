@@ -354,9 +354,10 @@ function assertNoImageTaskError(payload: unknown, fallback: string) {
 function normalizedProvenanceBaseUrl(value: string) {
     let url: URL;
     try { url = new URL(value.trim()); } catch { throw new ImageRequestError("图片任务来源 URL 无效"); }
-    const credentialQuery = Array.from(url.searchParams.keys()).some((key) => /^(?:api[_-]?key|access[_-]?token|token|password|secret|authorization)$/i.test(key));
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || credentialQuery) throw new ImageRequestError("图片任务来源 URL 协议或凭据无效");
-    return url.toString().replace(/\/$/, "");
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new ImageRequestError("图片任务来源 URL 协议或凭据无效");
+    url.search = "";
+    url.hash = "";
+    return `${url.origin}${url.pathname}`.replace(/\/$/, "");
 }
 
 function successfulEnvelope(payload: unknown, fallback: string) {
@@ -447,13 +448,14 @@ async function fetchImageTaskContent(input: {
         rejectTimeout(new ImageRequestError("图片任务内容请求超时"));
     }, input.timeoutMs);
     try {
+        const requestSignal = disposableAbortSignal(controller.signal, input.signal);
         const content = input.fetcher(request.url, {
-            ...request.options, signal: combinedAbortSignal(controller.signal, input.signal),
+            ...request.options, signal: requestSignal.signal,
         }).then(async (response) => ({
             status: response.status,
             contentType: response.headers.get("content-type"),
             blob: await response.blob(),
-        }));
+        })).finally(requestSignal.dispose);
         return await Promise.race([content, timeout]);
     } finally {
         input.clearTimer(timer);
@@ -507,22 +509,23 @@ async function pollImageTask(input: {
 function delay(ms: number, signal?: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
         if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener("abort", () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
+        const finish = () => { signal?.removeEventListener("abort", abort); resolve(); };
+        const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(new DOMException("Aborted", "AbortError")); };
+        const timer = setTimeout(finish, ms);
+        signal?.addEventListener("abort", abort, { once: true });
     });
 }
 
 const IMAGE_POLL_REQUEST_TIMEOUT_MS = 30_000;
-function combinedAbortSignal(timeoutSignal: AbortSignal, callerSignal?: AbortSignal) {
-    if (!callerSignal) return timeoutSignal;
+function disposableAbortSignal(...values: Array<AbortSignal | undefined>) {
+    const signals = values.filter((value): value is AbortSignal => Boolean(value));
+    if (signals.length < 2) return { signal: signals[0] || new AbortController().signal, dispose: () => undefined };
+    if (typeof AbortSignal.any === "function") return { signal: AbortSignal.any(signals), dispose: () => undefined };
     const controller = new AbortController();
     const abort = () => controller.abort();
-    if (timeoutSignal.aborted || callerSignal.aborted) abort();
-    else {
-        timeoutSignal.addEventListener("abort", abort, { once: true });
-        callerSignal.addEventListener("abort", abort, { once: true });
-    }
-    return controller.signal;
+    if (signals.some((signal) => signal.aborted)) abort();
+    else signals.forEach((signal) => signal.addEventListener("abort", abort, { once: true }));
+    return { signal: controller.signal, dispose: () => signals.forEach((signal) => signal.removeEventListener("abort", abort)) };
 }
 async function pollSubmittedImageTask(
     config: AiConfig,
@@ -531,25 +534,32 @@ async function pollSubmittedImageTask(
     options?: RequestOptions,
 ) : Promise<ImageResult[]> {
     for (let attempt = 0; attempt < 120; attempt += 1) {
+        const callerSignal = disposableAbortSignal(input.signal, options?.signal);
         const response = await pollImageTask({
             taskId: input.taskId, timeoutMs: input.timeoutMs,
-            transport: ({ signal, timeoutMs }) => axios.get<unknown>(
-                aiApiUrl(config, buildImageTaskStatusPath(config.apiMode, kind, input.taskId)),
-                aiRequestOptions(config, { signal: combinedAbortSignal(signal, combinedAbortSignal(input.signal, options?.signal)), timeout: timeoutMs }),
-            ),
+            transport: async ({ signal, timeoutMs }) => {
+                const requestSignal = disposableAbortSignal(signal, callerSignal.signal);
+                try {
+                    return await axios.get<unknown>(
+                        aiApiUrl(config, buildImageTaskStatusPath(config.apiMode, kind, input.taskId)),
+                        aiRequestOptions(config, { signal: requestSignal.signal, timeout: timeoutMs }),
+                    );
+                } finally { requestSignal.dispose(); }
+            },
             setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
             clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-        }) as { data: unknown };
+        }).finally(callerSignal.dispose) as { data: unknown };
         const task = unwrapImageTaskStatus(response.data);
         const state = classifyImageTaskStatus(task.status, config.apiMode);
         if (state === "success") return parseCompletedImageTask(response.data);
         if (state === "failure") throw upstreamImageTaskError(task, "图片生成失败");
         if (attempt === 119) break;
         const retryAfter = Number(task.retry_after);
+        const waitSignal = disposableAbortSignal(input.signal, options?.signal);
         await delay(
             Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(5000, Math.max(250, retryAfter * 1000)) : 1500,
-            combinedAbortSignal(input.signal, options?.signal),
-        );
+            waitSignal.signal,
+        ).finally(waitSignal.dispose);
     }
     throw new ImageRequestError("图片生成超时，请稍后重试");
 }
@@ -595,12 +605,15 @@ export async function recoverImageTask(
     if (!task.recoverable || task.apiMode !== "newapi") throw new ImageRequestError("该图片任务不可恢复");
     const channel = config.channels.find((item) => item.id === task.channelId);
     if (!channel) throw new ImageRequestError("图片任务原渠道已不存在，无法安全恢复凭据");
+    const savedBaseUrl = normalizedProvenanceBaseUrl(task.baseUrl);
+    const configuredBaseUrl = normalizedProvenanceBaseUrl(channel.baseUrl);
+    if (savedBaseUrl !== configuredBaseUrl) throw new ImageRequestError("图片任务来源与当前渠道地址不一致，已拒绝发送凭据");
     const requestConfig: AiConfig = {
         ...config,
         channelId: task.channelId,
         apiMode: "newapi",
         apiFormat: "openai",
-        baseUrl: normalizedProvenanceBaseUrl(task.baseUrl),
+        baseUrl: savedBaseUrl,
         apiKey: channel.apiKey,
         model: task.model,
         imageModel: task.model,
@@ -1237,5 +1250,5 @@ export const __test__ = {
     extractAcceptedImageTask, notifyAcceptedImageTask, classifyImageTaskStatus, unwrapImageTaskStatus,
     parseCompletedImageTask, buildImageTaskStatusPath, buildImageTaskContentPath,
     validateImageTaskContent, upstreamImageTaskError, buildImageContentFetchRequest, resolveSubmittedImageTask, resolveImageSubmission,
-    fetchImageTaskContent, pollImageTask, recoverImageTask: recoverImageTaskWithResolvers,
+    fetchImageTaskContent, pollImageTask, recoverImageTask: recoverImageTaskWithResolvers, normalizedProvenanceBaseUrl, disposableAbortSignal,
 };

@@ -48,7 +48,7 @@ describe("Phase 2B production wiring contracts", () => {
     test("project imports the real action factories rather than a test-only integration object", () => {
         expect(canvasProjectImageActionFactories).toEqual({
             createRecoveryAction: createCanvasImageRecoveryAction,
-            createSubmissionHandlers: createCanvasImageSubmissionHandlers,
+            prepareSubmission: prepareImageGenerationSubmission,
         });
     });
 
@@ -73,7 +73,7 @@ describe("Phase 2B recovery action", () => {
         const h = recoveryHarness();
         const beforeKeys = metadataKeys(h.original);
         await expect(h.action(h.original)).resolves.toEqual({ status: "success", nodeId: "target", storageKey: "image:durable" } satisfies CanvasImageRecoveryOutcome);
-        expect(h.events).toEqual(["recover", "upload", "update:target", "flush"]);
+        expect(h.events).toEqual(["update:target", "recover", "upload", "update:target", "flush"]);
         expect(h.current().id).toBe(h.original.id);
         expect(h.current().metadata).toMatchObject({ status: "success", content: "blob:preview", storageKey: "image:durable", prompt: "keep prompt", sentinel: { keep: true }, ...taskMetadata });
         expect(metadataKeys(h.current())).toEqual([...new Set([...beforeKeys, "content", "storageKey"])].sort());
@@ -86,8 +86,8 @@ describe("Phase 2B recovery action", () => {
         const h = recoveryHarness({ recoverImageTask: async () => { throw error; } });
         const before = structuredClone(h.original);
         await expect(h.action(h.original)).resolves.toEqual({ status, nodeId: "target", error });
-        expect(h.current()).toEqual(before);
-        expect(h.events).toEqual([]);
+        expect(h.current()).toMatchObject({ ...before, metadata: { ...before.metadata, status: "error", errorDetails: error.message } });
+        expect(h.events).toEqual(["update:target", "update:target"]);
     });
 
     test.each(["upload", "flush"] as const)("a %s failure returns a structured error and preserves task metadata and unrelated identity", async (stage) => {
@@ -96,9 +96,55 @@ describe("Phase 2B recovery action", () => {
         const h = recoveryHarness(stage === "upload"
             ? { uploadImage: async () => { throw error; } }
             : { flushCanvasStorePersistence: async () => { throw error; } });
-        await expect(h.action(h.original)).resolves.toEqual({ status: "failure", stage, nodeId: "target", error });
+        const outcome = await h.action(h.original);
+        expect(outcome).toMatchObject({ status: "failure", stage, nodeId: "target", error });
         expect(Object.fromEntries(taskKeys.map((key) => [key, h.current().metadata?.[key]]))).toEqual(taskMetadata);
         expect(h.current().metadata?.sentinel).toBe(sentinel);
+    });
+
+    test("flush failure restores a recoverable error and explicitly retries persistence", async () => {
+        let flushes = 0;
+        const error = new Error("flush failed");
+        const h = recoveryHarness({ flushCanvasStorePersistence: async () => { flushes += 1; throw error; } });
+        await expect(h.action(h.original)).resolves.toMatchObject({ status: "failure", stage: "flush", persistenceRetried: true });
+        expect(flushes).toBe(2);
+        expect(h.current().metadata).toMatchObject({ status: "error", taskId: "accepted-task", taskRecoverable: true });
+    });
+
+    test("sets loading without clearing recovery metadata and passes the controller signal", async () => {
+        let observed: AbortSignal | undefined;
+        const h = recoveryHarness({ recoverImageTask: async (_task: unknown, signal: AbortSignal) => {
+            observed = signal;
+            expect(h.current().metadata).toMatchObject({ status: "loading", ...taskMetadata });
+            throw new DOMException("Aborted", "AbortError");
+        } });
+        const controller = new AbortController();
+        await h.action(h.original, controller);
+        expect(observed).toBe(controller.signal);
+        expect(h.current().metadata).toMatchObject({ status: "error", ...taskMetadata });
+    });
+
+    test.each(["recover", "upload", "flush"] as const)("does not mutate after becoming stale during %s", async (stage) => {
+        let active = true;
+        const overrides = {
+            isCurrent: () => active,
+            ...(stage === "recover" ? { recoverImageTask: async () => { active = false; throw new Error("late recover"); } } : {}),
+            ...(stage === "upload" ? { uploadImage: async () => { active = false; throw new Error("late upload"); } } : {}),
+            ...(stage === "flush" ? { flushCanvasStorePersistence: async () => { active = false; throw new Error("late flush"); } } : {}),
+        };
+        const h = recoveryHarness(overrides);
+        const outcome = await h.action(h.original);
+        expect(outcome.status).toBe("stale");
+        expect(h.events.filter((event) => event.startsWith("update:"))).toHaveLength(stage === "flush" ? 2 : 1);
+        expect(h.current().metadata?.errorDetails).toBeUndefined();
+    });
+
+    test("an explicit abort cannot be overwritten by a late catch", async () => {
+        const controller = new AbortController();
+        const h = recoveryHarness({ recoverImageTask: async () => { controller.abort(); throw new Error("late failure"); } });
+        await expect(h.action(h.original, controller)).resolves.toMatchObject({ status: "aborted", nodeId: "target" });
+        expect(h.events).toEqual(["update:target"]);
+        expect(h.current().metadata?.status).toBe("loading");
     });
 });
 

@@ -127,6 +127,12 @@ export function imageRetryActionLabel(node: CanvasNodeData) {
     return shouldRecoverImageTask(node) ? "重新获取成品" : "重试";
 }
 
+export function canvasNodeRetryLabel(node: CanvasNodeData) {
+    return shouldRecoverImageTask(node)
+        ? { kind: "recover" as const, label: "重新获取成品" }
+        : { kind: "regenerate" as const, label: "重试" };
+}
+
 export function resetInterruptedImageGeneration(nodes: CanvasNodeData[]) {
     return nodes.map((node) => {
         if (node.metadata?.status !== "loading") return node;

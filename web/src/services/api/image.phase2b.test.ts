@@ -34,6 +34,8 @@ type ImageTaskHooks = {
         setTimer: (callback: () => void, delayMs: number) => unknown;
         clearTimer: (timer: unknown) => void;
     }) => Promise<{ status: number; contentType: string | null; blob: Blob }>;
+    normalizedProvenanceBaseUrl: (value: string) => string;
+    disposableAbortSignal: (...signals: Array<AbortSignal | undefined>) => { signal: AbortSignal; dispose: () => void };
     resolveSubmittedImageTask: (input: {
         submittedPayload: unknown;
         config: AiConfig;
@@ -96,6 +98,27 @@ function config(overrides: Partial<AiConfig> = {}): AiConfig {
 }
 
 describe("Phase 2B image task acceptance protocol", () => {
+    test("provenance persists origin/path only, stripping every query and hash", () => {
+        expect(hook("normalizedProvenanceBaseUrl")("https://api.example.com/console/?innocent=1&token=secret#fragment"))
+            .toBe("https://api.example.com/console");
+    });
+
+    test("disposable abort composition removes fallback listeners", () => {
+        const originalAny = AbortSignal.any;
+        const added: EventListener[] = [];
+        const removed: EventListener[] = [];
+        const controller = new AbortController();
+        const other = new AbortController();
+        Object.defineProperty(AbortSignal, "any", { configurable: true, value: undefined });
+        const add = controller.signal.addEventListener.bind(controller.signal);
+        const remove = controller.signal.removeEventListener.bind(controller.signal);
+        controller.signal.addEventListener = ((type: string, listener: EventListener) => { added.push(listener); add(type, listener); }) as typeof controller.signal.addEventListener;
+        controller.signal.removeEventListener = ((type: string, listener: EventListener) => { removed.push(listener); remove(type, listener); }) as typeof controller.signal.removeEventListener;
+        try {
+            hook("disposableAbortSignal")(controller.signal, other.signal).dispose();
+            expect(removed).toEqual(added);
+        } finally { Object.defineProperty(AbortSignal, "any", { configurable: true, value: originalAny }); }
+    });
     test.each<[unknown, string]>([
         [{ task_id: "task-top" }, "task-top"],
         [{ id: "task-id-alias" }, "task-id-alias"],
