@@ -42,6 +42,7 @@ import { useAgentStore } from "@/stores/use-agent-store";
 import { flushCanvasStorePersistence, useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { acceptImageTaskMetadata, createCanvasImageRecoveryAction, prepareImageGenerationSubmission } from "@/lib/canvas/canvas-image-recovery-actions";
 import { createCanvasGenerationRequestGuard } from "@/lib/canvas/canvas-generation-request-guard";
+import { createCanvasProjectRestoreGuard } from "@/lib/canvas/canvas-project-restore-guard";
 import { useAgentBridge } from "@/pages/canvas/hooks/use-agent-bridge";
 import { usePluginHost } from "@/pages/canvas/hooks/use-plugin-host";
 import { buildNodeMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -268,6 +269,7 @@ function InfiniteCanvasPage() {
     const pendingConnectionCreateRef = useRef(pendingConnectionCreate);
     const generationRequestsRef = useRef(new Map<string, CanvasGenerationRequest>());
     const projectInstanceRef = useRef({ projectId, token: 0 });
+    const projectRestoreGuardRef = useRef(createCanvasProjectRestoreGuard());
 
     const persistImageTaskAcceptance = useCallback(async (nodeId: string, acceptance: ImageTaskAcceptance, isCurrentRequest: () => boolean) => {
         if (!isCurrentRequest()) throw new Error("画布项目、目标节点或生成请求已变更，已停止任务轮询");
@@ -361,6 +363,7 @@ function InfiniteCanvasPage() {
         generationRequestsRef.current.forEach((request) => request.controller.abort());
         generationRequestsRef.current.clear();
         projectInstanceRef.current = { projectId, token: projectInstanceRef.current.token + 1 };
+        const restoreInstance = projectRestoreGuardRef.current.begin(projectId);
         setProjectLoaded(false);
         const project = openProject(projectId);
         if (!project) {
@@ -370,7 +373,9 @@ function InfiniteCanvasPage() {
 
         const restore = async () => {
             const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            if (!projectRestoreGuardRef.current.isCurrent(restoreInstance)) return;
             const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            if (!projectRestoreGuardRef.current.isCurrent(restoreInstance)) return;
             setNodes(restoredNodes);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
@@ -395,6 +400,7 @@ function InfiniteCanvasPage() {
             setProjectLoaded(true);
         };
         void restore();
+        return () => projectRestoreGuardRef.current.invalidate(restoreInstance);
     }, [hydrated, navigate, openProject, projectId]);
 
     useEffect(() => {
