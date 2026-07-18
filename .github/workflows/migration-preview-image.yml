@@ -1,0 +1,151 @@
+name: Migration preview image
+
+on:
+  push:
+    branches:
+      - jonoka/migration-v0.9-preview
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-preview-image-publisher
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/jonoka/infinite-canvas
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      labels: ${{ steps.meta.outputs.labels }}
+    steps:
+      - id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: |
+            type=raw,value=preview-${{ github.sha }}
+
+  build:
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ needs.metadata.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=migration-preview-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=migration-preview-${{ matrix.arch }}
+
+      - name: Export image digest
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Invalid image digest: $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${IMAGE_DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: migration-preview-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: migration-preview-digest-*
+          merge-multiple: true
+
+      - name: Create multi-architecture manifest
+        shell: bash
+        run: |
+          mapfile -t digest_files < <(find "$RUNNER_TEMP/digests" -type f -printf '%f\n' | sort)
+          if [ "${#digest_files[@]}" -ne 2 ]; then
+            echo "Expected exactly two digest files, found ${#digest_files[@]}" >&2
+            exit 1
+          fi
+
+          digest_args=()
+          for digest in "${digest_files[@]}"; do
+            if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Invalid digest filename: $digest" >&2
+              exit 1
+            fi
+            digest_args+=("${IMAGE_NAME}@sha256:${digest}")
+          done
+
+          docker buildx imagetools create \
+            -t "${IMAGE_NAME}:preview-${GITHUB_SHA}" \
+            "${digest_args[@]}"
+
+      - name: Verify immutable image platforms
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_NAME }}:preview-${{ github.sha }}
+        run: |
+          manifest="$(docker buildx imagetools inspect --raw "$IMAGE_TAG")"
+          jq -e '
+            [.manifests[].platform | "\(.os)/\(.architecture)"] as $platforms
+            | ($platforms | index("linux/amd64") != null)
+              and ($platforms | index("linux/arm64") != null)
+          ' <<< "$manifest" >/dev/null
