@@ -2393,18 +2393,22 @@ function InfiniteCanvasPage() {
                         },
                     };
                     pendingChildIds = [videoId];
+                    const controller = startGenerationRequest(videoId, nodeId, nodeId, runController);
+                    if (!isCurrentRun()) return;
                     setNodes((prev) =>
                         isEmptyVideoNode
                             ? prev.map((node) => (node.id === nodeId ? { ...node, ...videoNode } : node))
                             : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode],
                     );
+                    if (!isCurrentRun()) return;
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
-                    const controller = startGenerationRequest(videoId, nodeId, nodeId, runController);
                     try {
+                        if (!isCurrentRun()) return;
                         const video = await storeGeneratedVideo(
                             await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }),
                         );
                         if (!commitCanvasVideoResultIfCurrent({ isCurrentRequest: isCurrentRun, result: video, commit: () => undefined })) return;
+                        if (!isCurrentRun()) return;
                         const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                         setNodes((prev) =>
                             prev.map((node) =>
@@ -2631,7 +2635,7 @@ function InfiniteCanvasPage() {
             }
             const retryImages = retryReferenceImages || [];
             const videoRetryImages = videoRetryPlan
-                ? videoRetryPlan.references.map((reference, index) => ({ ...reference, id: `retry-image-${index}`, name: "reference.png", type: "image/png" }))
+                ? videoRetryPlan.references.map((reference) => ({ ...reference, id: `retry-image-${reference.order}`, name: "reference.png", type: "image/png" }))
                 : retryImages;
             const savedVideoReferences = (videoRetryPlan?.videoReferences || []).map((reference) => ({
                         id: `retry-${reference.url}`,
@@ -2641,6 +2645,7 @@ function InfiniteCanvasPage() {
                         storageKey: reference.storageKey,
                         role: reference.role,
                         component: reference.component,
+                        order: reference.order,
                     }));
             const savedAudioReferences = (videoRetryPlan?.audioReferences || []).map((reference) => ({
                 id: `retry-${reference.url}`,
@@ -2650,6 +2655,7 @@ function InfiniteCanvasPage() {
                 storageKey: reference.storageKey,
                 role: reference.role,
                 component: reference.component,
+                order: reference.order,
             }));
 
             setRunningNodeId(node.id);
@@ -2681,6 +2687,7 @@ function InfiniteCanvasPage() {
                         isCurrentRequest,
                         result: video,
                         commit: (currentVideo) => {
+                            if (!isCurrentRun()) return;
                             const videoSize = fitNodeSize(currentVideo.width || node.width, currentVideo.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                             setNodes((prev) =>
                                 prev.map((item) =>

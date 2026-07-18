@@ -17,5 +17,13 @@ describe("Canvas video retry commit wiring", () => {
         expect(retryVideoBranch).toContain("isCurrentRequest");
         expect(retryVideoBranch).toContain("commit:");
         expect(retryVideoBranch.indexOf("commitCanvasVideoResultIfCurrent({")).toBeLessThan(retryVideoBranch.indexOf("setNodes("));
+        expect(retryVideoBranch).toContain("if (!isCurrentRequest()) return;");
+    });
+
+    test("normal video generation guards node creation, connection, storage, and final node write", async () => {
+        const source = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
+        const videoBranch = section(source, 'if (mode === "video") {', 'if (mode === "audio") {');
+        expect(videoBranch.match(/if \(!isCurrentRun\(\)\) return;/g)?.length).toBeGreaterThanOrEqual(4);
+        expect(videoBranch.indexOf("if (!isCurrentRun()) return;\n                    const video = await storeGeneratedVideo")).toBeGreaterThanOrEqual(0);
     });
 });
