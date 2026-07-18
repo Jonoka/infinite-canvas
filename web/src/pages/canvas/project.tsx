@@ -2404,9 +2404,9 @@ function InfiniteCanvasPage() {
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
                     try {
                         if (!isCurrentRun()) return;
-                        const video = await storeGeneratedVideo(
-                            await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal }),
-                        );
+                        const result = await requestVideoGeneration(generationConfig, effectivePrompt, generationContext.referenceImages, generationContext.referenceVideos, generationContext.referenceAudios, { signal: controller.signal });
+                        if (!isCurrentRun()) return;
+                        const video = await storeGeneratedVideo(result);
                         if (!commitCanvasVideoResultIfCurrent({ isCurrentRequest: isCurrentRun, result: video, commit: () => undefined })) return;
                         if (!isCurrentRun()) return;
                         const videoSize = fitNodeSize(video.width || spec.width, video.height || spec.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
