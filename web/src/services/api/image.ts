@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { assertModelCapability, encodeChannelModel, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { assertModelCapability, decodeChannelModel, encodeChannelModel, resolveModelRequestConfig, resolveModelScript, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { aiApiUrl, aiFetchOptions, aiRequestOptions, assertAiConfig } from "./ai-client";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
@@ -348,7 +348,8 @@ export const imageRequestErrorFromPayload = upstreamImageTaskError;
 function resolveImageRequestConfig(config: AiConfig, override: Partial<Pick<AiConfig, "model" | "group" | "quality" | "size" | "count">> = {}) {
     const selected = (config.imageModel || config.model).trim();
     const resolved = config.channelId ? config : resolveModelRequestConfig(config, selected);
-    return { ...resolved, ...override, model: override.model || resolved.model, imageModel: override.model || resolved.model };
+    const explicitGroup = config.channelId || !decodeChannelModel(selected) ? config.group : resolved.group;
+    return { ...resolved, ...override, group: override.group ?? explicitGroup, model: override.model || resolved.model, imageModel: override.model || resolved.model };
 }
 
 function imageTaskErrorEnvelope(payload: Record<string, unknown>): Record<string, unknown> | undefined {

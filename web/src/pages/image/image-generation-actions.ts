@@ -34,7 +34,7 @@ async function defaultConsent(config: AiConfig, count: number, loadPricing?: Dep
 
 export function createImageWorkbenchActions<T>(dependencies: Dependencies<T>) {
     const resolve = (config: AiConfig) => {
-        const resolved = config.channelId ? config : resolveModelRequestConfig(config, (config.imageModel || config.model).trim());
+        const resolved = config.channelId || !Array.isArray(config.channels) ? config : resolveModelRequestConfig(config, (config.imageModel || config.model).trim());
         return { ...resolved, imageModel: resolved.model };
     };
     const consent = async (config: AiConfig, count: number, failedIndexes: number[]) => {
