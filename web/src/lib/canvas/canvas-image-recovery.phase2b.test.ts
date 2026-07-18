@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import * as generationHelpers from "./canvas-generation-helpers";
+import {
+    buildImageRetryPlan,
+    clearImageTaskRecovery,
+    imageRetryActionLabel,
+    persistAcceptedImageTask,
+    resetInterruptedImageGeneration,
+    resolveImageTaskRecoveryConfig,
+    shouldRecoverImageTask,
+} from "./canvas-generation-helpers";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
 import type { AiConfig } from "@/stores/use-config-store";
 
@@ -34,11 +42,19 @@ type RecoveryHooks = {
     }) => AiConfig;
 };
 
-const hooks = (generationHelpers as typeof generationHelpers & { __test__?: Partial<RecoveryHooks> }).__test__;
+const hooks: RecoveryHooks = {
+    buildImageRetryPlan,
+    clearImageTaskRecovery,
+    imageRetryActionLabel,
+    persistAcceptedImageTask,
+    resetInterruptedImageGeneration,
+    resolveImageTaskRecoveryConfig,
+    shouldRecoverImageTask,
+};
 
 function hook<K extends keyof RecoveryHooks>(name: K): RecoveryHooks[K] {
-    const value = hooks?.[name];
-    expect(typeof value, `Phase 2B requires canvas-generation-helpers.ts __test__.${name} as a pure policy seam`).toBe("function");
+    const value = hooks[name];
+    expect(typeof value, `Phase 2B requires canvas-generation-helpers.ts to export ${name} as a production policy`).toBe("function");
     return value as RecoveryHooks[K];
 }
 
