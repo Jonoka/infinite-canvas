@@ -4,10 +4,11 @@ import {
     CanvasExportError,
     buildCanvasProjectExport,
     buildSelectedNodeMediaExport,
+    parseCanvasProjectExportManifest,
     type CanvasExportReaders,
 } from "./canvas-export";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
-import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { CanvasNodeType, type CanvasNodeData, type CanvasNodeTypeId } from "@/types/canvas";
 
 const baseProject: CanvasProject = {
     id: "project-1",
@@ -23,15 +24,15 @@ const baseProject: CanvasProject = {
     viewport: { x: 0, y: 0, k: 1 },
 };
 
-function mediaNode(id: string, type: CanvasNodeType, title: string, storageKey: string, content = storageKey): CanvasNodeData {
+function mediaNode(id: string, type: CanvasNodeTypeId, title: string, storageKey: string, content = storageKey): CanvasNodeData {
     return {
         id,
         type,
         title,
         position: { x: 0, y: 0 },
-        size: { width: 100, height: 100 },
-        status: "success",
-        metadata: { storageKey, content },
+        width: 100,
+        height: 100,
+        metadata: { storageKey, content, status: "success" },
     };
 }
 
@@ -88,7 +89,7 @@ describe("Phase 4B current-canvas export contract", () => {
         const node = mediaNode("node-secret", CanvasNodeType.Image, "私密", "image:a");
         node.metadata = {
             ...node.metadata,
-            taskBaseUrl: "https://api.example.test/content?token=secret-token&safe=yes",
+            taskBaseUrl: "https://user:secret-token@api.example.test/content?token=secret-token&safe=yes#secret-token",
             apiKey: "secret-api-key",
         } as typeof node.metadata;
 
@@ -98,6 +99,27 @@ describe("Phase 4B current-canvas export contract", () => {
         expect(serialized).not.toContain("secret-api-key");
         expect(serialized).not.toContain("secret-token");
         expect(plan.manifest.projects[0].issues).toContainEqual(expect.objectContaining({ code: "credential_redacted", nodeId: "node-secret" }));
+    });
+
+    test("recursively collects nested chat/plugin keys and preserves ordinary prompt URLs", async () => {
+        const plugin = mediaNode("plugin", "example:media", "插件", "plugin:file");
+        plugin.metadata = { ...plugin.metadata, prompt: "请访问 https://example.test/help?topic=canvas#intro", nested: { storageKey: "image:nested" } } as typeof plugin.metadata;
+        const project = { ...baseProject, nodes: [plugin], chatSessions: [{ id: "chat", title: "chat", createdAt: "", updatedAt: "", messages: [{ id: "message", role: "assistant" as const, text: "ok", references: [{ id: "ref", type: CanvasNodeType.Image, title: "ref", storageKey: "image:chat" }] }] }] };
+        const plan = await buildCanvasProjectExport(project, readers({
+            "plugin:file": new Blob(["p"], { type: "image/png" }),
+            "image:nested": new Blob(["n"], { type: "image/png" }),
+            "image:chat": new Blob(["c"], { type: "image/png" }),
+        }));
+
+        expect(plan.manifest.projects[0].files.map((file) => file.storageKey)).toEqual(["image:chat", "image:nested", "plugin:file"]);
+        expect(plan.manifest.projects[0].project.nodes[0].metadata?.prompt).toBe("请访问 https://example.test/help?topic=canvas#intro");
+    });
+
+    test("sanitizes traversal and resolves colliding ZIP paths globally", async () => {
+        const project = { ...baseProject, id: "../same", nodes: [mediaNode("a", CanvasNodeType.Image, "a", "image:a:b"), mediaNode("b", CanvasNodeType.Image, "b", "image:a_b")] };
+        const plan = await buildCanvasProjectExport(project, readers({ "image:a:b": new Blob(["a"], { type: "image/png" }), "image:a_b": new Blob(["b"], { type: "image/png" }) }));
+        expect(plan.entries.every((entry) => !entry.name.includes("..") && !entry.name.includes("\\"))).toBe(true);
+        expect(new Set(plan.entries.map((entry) => entry.name)).size).toBe(plan.entries.length);
     });
 });
 
@@ -123,7 +145,7 @@ describe("Phase 4B selected-node media export contract", () => {
     });
 
     test("never fetches remote media URLs and fails without creating a fake JSON media export", async () => {
-        const remote = mediaNode("remote", CanvasNodeType.Image, "远程", "", "https://cdn.example.test/a.png?token=secret");
+        const remote = mediaNode("remote", CanvasNodeType.Image, "远程", "", "https://cdn.example.test/a.png?token=secret-token");
         const plan = await buildSelectedNodeMediaExport([remote], ["remote"], readers({}));
 
         expect(plan.entries).toEqual([]);
@@ -140,5 +162,25 @@ describe("Phase 4B selected-node media export contract", () => {
         await expect(buildSelectedNodeMediaExport([node], [node.id], { ...readers({ "image:large": oversized }), limits: { maxSingleFileBytes: 8, maxTotalBytes: 16, maxFiles: 10, maxSelectedNodes: 10 } })).rejects.toMatchObject({
             code: "single_file_size_limit",
         });
+    });
+
+    test("exports a plugin node with a valid storage key and reports exact MIME failures", async () => {
+        const plugin = mediaNode("plugin", "example:media", "插件", "plugin:file");
+        const plan = await buildSelectedNodeMediaExport([plugin], [plugin.id], readers({ "plugin:file": new Blob(["x"], { type: "application/x-custom" }) }));
+        expect(plan.manifest.issues).toContainEqual(expect.objectContaining({ code: "unknown_mime_type", nodeId: "plugin" }));
+        const valid = await buildSelectedNodeMediaExport([plugin], [plugin.id], readers({ "plugin:file": new Blob(["x"], { type: "image/png" }) }));
+        expect(valid.entries).toHaveLength(1);
+    });
+});
+
+describe("Phase 4B import manifest guard", () => {
+    const project = { project: baseProject, files: [] };
+    test("accepts runtime v3 and v4 canvas-project manifests", () => {
+        expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, exportedAt: "", projects: [project] }).version).toBe(3);
+        expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "canvas-project", exportedAt: "", projects: [project], summary: {} }).version).toBe(4);
+    });
+    test("rejects selected-node and missing file declarations", () => {
+        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "selected-node-media", projects: [] })).toThrow(CanvasExportError);
+        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject }] })).toThrow(CanvasExportError);
     });
 });

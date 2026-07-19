@@ -8,10 +8,10 @@ import { setMediaBlob } from "@/services/file-storage";
 import { setImageBlob } from "@/services/image-storage";
 import { CanvasDeleteProjectsDialog } from "@/components/canvas/canvas-delete-projects-dialog";
 import { CanvasProjectCard } from "@/components/canvas/canvas-project-card";
-import type { CanvasExportFile } from "@/types/canvas-export";
+
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useCanvasUiStore } from "@/stores/canvas/use-canvas-ui-store";
-import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
+import { exportCanvasProjects, parseCanvasProjectExportManifest } from "@/lib/canvas/canvas-export";
 
 export default function CanvasPage() {
     const { message } = App.useApp();
@@ -33,18 +33,28 @@ export default function CanvasPage() {
         navigate(`/canvas/${id}${agentQuery}`);
     };
     const createAndEnter = () => enterProject(createProject(`无限画布 ${projects.length + 1}`));
+    const exportSelected = async () => {
+        try {
+            const result = await exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `无限画布-${selectedIds.length}个项目`);
+            if (result.status === "partial") message.warning(`已导出选中画布，${result.omittedCount} 个媒体未导出`);
+            else message.success(`已导出 ${selectedIds.length} 个画布`);
+        } catch (error) {
+            console.error(error);
+            message.error("导出失败，请重试");
+        }
+    };
     const importCanvas = async (file?: File) => {
         if (!file) return;
         try {
             const zip = await readZip(file);
             const projectFile = zip.get("projects.json");
             if (!projectFile) throw new Error("missing projects.json");
-            const data = JSON.parse(await projectFile.text()) as CanvasExportFile;
+            const data = parseCanvasProjectExportManifest(JSON.parse(await projectFile.text()));
             await Promise.all(
                 data.projects.flatMap((project) =>
                     project.files.map(async (item) => {
                         const blob = zip.get(item.path);
-                        if (!blob) return;
+                        if (!blob) throw new Error(`missing declared file: ${item.path}`);
                         const typedBlob = blob.type ? blob : blob.slice(0, blob.size, item.mimeType);
                         await (item.storageKey.startsWith("image:") ? setImageBlob(item.storageKey, typedBlob) : setMediaBlob(item.storageKey, typedBlob));
                     }),
@@ -78,7 +88,7 @@ export default function CanvasPage() {
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
                             <>
-                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `无限画布-${selectedIds.length}个项目`)}>
+                                <Button disabled={!hydrated} icon={<Download className="size-4" />} onClick={() => void exportSelected()}>
                                     导出选中
                                 </Button>
                                 <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
