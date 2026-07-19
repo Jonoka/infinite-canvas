@@ -115,6 +115,39 @@ describe("Phase 4B current-canvas export contract", () => {
         expect(plan.manifest.projects[0].project.nodes[0].metadata?.prompt).toBe("请访问 https://example.test/help?topic=canvas#intro");
     });
 
+    test("collects Phase 3 reference keys and preserves supported native media MIME types", async () => {
+        const video = mediaNode("video", CanvasNodeType.Video, "视频", "video:result");
+        video.metadata = {
+            ...video.metadata,
+            references: ["image:first"],
+            videoReferences: [
+                { kind: "video", url: "video:motion" },
+                { kind: "audio", url: "audio:music" },
+            ],
+        };
+        const plan = await buildCanvasProjectExport({ ...baseProject, nodes: [video] }, readers({
+            "video:result": new Blob(["result"], { type: "video/quicktime" }),
+            "image:first": new Blob(["image"], { type: "image/png" }),
+            "video:motion": new Blob(["motion"], { type: "video/mp4" }),
+            "audio:music": new Blob(["music"], { type: "audio/flac" }),
+        }));
+
+        expect(plan.manifest.projects[0].files.map((file) => file.storageKey)).toEqual(["audio:music", "image:first", "video:motion", "video:result"]);
+        expect(plan.result.status).toBe("success");
+    });
+
+    test("does not persist remote media secrets, transient payloads, or invalid storage keys", async () => {
+        const remote = mediaNode("remote", CanvasNodeType.Image, "远程", "", "https://cdn.example.test/a.png?token=content-secret");
+        remote.metadata = { ...remote.metadata, storageKey: "https://evil.example/a?token=key-secret", dataUrl: "data:image/png;base64,payload-secret", urls: ["blob:transient-secret"] } as typeof remote.metadata;
+        const plan = await buildCanvasProjectExport({ ...baseProject, nodes: [remote] }, readers({}));
+        const serialized = JSON.stringify(plan.manifest);
+
+        expect(serialized).not.toContain("content-secret");
+        expect(serialized).not.toContain("key-secret");
+        expect(serialized).not.toContain("payload-secret");
+        expect(serialized).not.toContain("transient-secret");
+    });
+
     test("sanitizes traversal and resolves colliding ZIP paths globally", async () => {
         const project = { ...baseProject, id: "../same", nodes: [mediaNode("a", CanvasNodeType.Image, "a", "image:a:b"), mediaNode("b", CanvasNodeType.Image, "b", "image:a_b")] };
         const plan = await buildCanvasProjectExport(project, readers({ "image:a:b": new Blob(["a"], { type: "image/png" }), "image:a_b": new Blob(["b"], { type: "image/png" }) }));
@@ -179,8 +212,11 @@ describe("Phase 4B import manifest guard", () => {
         expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, exportedAt: "", projects: [project] }).version).toBe(3);
         expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "canvas-project", exportedAt: "", projects: [project], summary: {} }).version).toBe(4);
     });
-    test("rejects selected-node and missing file declarations", () => {
+    test("rejects selected-node and unsafe, missing, or conflicting file declarations", () => {
         expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "selected-node-media", projects: [] })).toThrow(CanvasExportError);
         expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject }] })).toThrow(CanvasExportError);
+        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "../escape.png", mimeType: "image/png" }] }] })).toThrow(CanvasExportError);
+        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "projects.json", mimeType: "image/png" }] }] })).toThrow(CanvasExportError);
+        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "projects/p/files/a.png", mimeType: "video/mp4" }] }] })).toThrow(CanvasExportError);
     });
 });

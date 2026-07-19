@@ -23,7 +23,9 @@ const MEDIA_TYPES = new Set<string>([CanvasNodeType.Image, CanvasNodeType.Video,
 const STORAGE_KEY = /^(?!https?:|blob:|data:)[a-z][a-z0-9._-]*:[a-z0-9][a-z0-9._:-]*$/i;
 const MIME_EXTENSIONS: Record<string, string> = {
     "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif",
-    "video/mp4": "mp4", "video/webm": "webm", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/ogg": "ogg",
+    "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
+    "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/ogg": "ogg",
+    "audio/opus": "opus", "audio/aac": "aac", "audio/flac": "flac", "audio/pcm": "pcm",
 };
 
 export class CanvasExportError extends Error {
@@ -61,7 +63,7 @@ export async function buildSelectedNodeMediaExport(nodes: CanvasNodeData[], sele
             continue;
         }
         if (!isStorageKey(storageKey)) {
-            issues.push({ code: "invalid_storage_key", nodeId: node.id, storageKey });
+            issues.push({ code: "invalid_storage_key", nodeId: node.id });
             continue;
         }
         const duplicate = seen.get(storageKey);
@@ -114,6 +116,7 @@ async function buildCanvasProjectsExport(projects: CanvasProject[], readers: Can
     const limits = getLimits(readers);
     const entries: ExportEntry[] = [];
     const exportedProjects: CanvasProjectExportItem[] = [];
+    const exportedAssets = new Map<string, CanvasExportAsset>();
     const paths = createPathResolver(["projects.json"]);
     let referencedFileCount = 0;
     let exportedBytes = 0;
@@ -133,8 +136,13 @@ async function buildCanvasProjectsExport(projects: CanvasProject[], readers: Can
         const projectSegment = safeSegment(project.id, "project");
         for (const { storageKey, nodeIds, nodeTypes } of references) {
             if (!isStorageKey(storageKey)) {
-                issues.push({ code: "invalid_storage_key", nodeId: nodeIds[0], storageKey });
+                issues.push({ code: "invalid_storage_key", nodeId: nodeIds[0] });
                 omittedCount += 1;
+                continue;
+            }
+            const existing = exportedAssets.get(storageKey);
+            if (existing) {
+                files.push({ ...existing, nodeIds });
                 continue;
             }
             const blob = await readBlob(storageKey, readers);
@@ -151,7 +159,9 @@ async function buildCanvasProjectsExport(projects: CanvasProject[], readers: Can
             }
             assertBlobLimits(blob, entries.length + 1, exportedBytes + blob.size, limits);
             const path = paths.resolve("projects", projectSegment, "files", `${safeSegment(storageKey, "media")}.${mime.extension}`);
-            files.push({ storageKey, path, mimeType: mime.mimeType, bytes: blob.size, nodeIds });
+            const asset = { storageKey, path, mimeType: mime.mimeType, bytes: blob.size, nodeIds };
+            files.push(asset);
+            exportedAssets.set(storageKey, asset);
             entries.push({ name: path, data: blob });
             exportedBytes += blob.size;
         }
@@ -166,43 +176,58 @@ async function buildCanvasProjectsExport(projects: CanvasProject[], readers: Can
 
 function collectProjectReferences(project: CanvasProject) {
     const references = new Map<string, { nodeIds: Set<string>; nodeTypes: Set<string> }>();
-    const visit = (value: unknown, nodeId?: string, nodeType?: string) => {
-        if (Array.isArray(value)) return value.forEach((item) => visit(item, nodeId, nodeType));
+    const visit = (value: unknown, nodeId?: string, nodeType?: string, fieldName?: string) => {
+        if (Array.isArray(value)) {
+            value.forEach((item) => {
+                if (typeof item === "string" && isImplicitStorageReferenceField(fieldName) && isStorageKey(item)) addReference(item, nodeId, nodeType);
+                else visit(item, nodeId, nodeType, fieldName);
+            });
+            return;
+        }
         if (!value || typeof value !== "object") return;
         const record = value as Record<string, unknown>;
         const isNode = typeof record.id === "string" && typeof record.type === "string";
         const nextNodeId = isNode ? record.id as string : nodeId;
         const nextNodeType = isNode ? record.type as string : nodeType;
-        if (typeof record.storageKey === "string" && record.storageKey) {
-            const reference = references.get(record.storageKey) || { nodeIds: new Set<string>(), nodeTypes: new Set<string>() };
-            if (nextNodeId) reference.nodeIds.add(nextNodeId);
-            if (nextNodeType) reference.nodeTypes.add(nextNodeType);
-            references.set(record.storageKey, reference);
-        }
-        Object.values(record).forEach((item) => visit(item, nextNodeId, nextNodeType));
+        if (typeof record.storageKey === "string" && record.storageKey) addReference(record.storageKey, nextNodeId, nextNodeType);
+        Object.entries(record).forEach(([key, item]) => {
+            if (typeof item === "string" && isImplicitStorageReferenceField(key) && isStorageKey(item)) addReference(item, nextNodeId, nextNodeType);
+            else visit(item, nextNodeId, nextNodeType, key);
+        });
+    };
+    const addReference = (storageKey: string, nodeId?: string, nodeType?: string) => {
+        const reference = references.get(storageKey) || { nodeIds: new Set<string>(), nodeTypes: new Set<string>() };
+        if (nodeId) reference.nodeIds.add(nodeId);
+        if (nodeType) reference.nodeTypes.add(nodeType);
+        references.set(storageKey, reference);
     };
     visit(project);
     return [...references].sort(([a], [b]) => a.localeCompare(b)).map(([storageKey, value]) => ({ storageKey, nodeIds: [...value.nodeIds].sort(), nodeTypes: [...value.nodeTypes].sort() }));
 }
 
 function redactProject(project: CanvasProject, issues: CanvasExportIssue[]): CanvasProject {
-    return redactValue(project, undefined, issues) as CanvasProject;
+    return redactValue(project, undefined, issues, false) as CanvasProject;
 }
 
-function redactValue(value: unknown, nodeId: string | undefined, issues: CanvasExportIssue[]): unknown {
-    if (Array.isArray(value)) return value.map((item) => redactValue(item, nodeId, issues));
+function redactValue(value: unknown, nodeId: string | undefined, issues: CanvasExportIssue[], mediaContext: boolean): unknown {
+    if (Array.isArray(value)) return value.map((item) => redactValue(item, nodeId, issues, mediaContext));
     if (!value || typeof value !== "object") return value;
     const record = value as Record<string, unknown>;
     const currentNodeId = typeof record.id === "string" && "type" in record ? record.id : nodeId;
+    const currentMediaContext = mediaContext || (typeof record.type === "string" && MEDIA_TYPES.has(record.type));
+    const validStorageKey = typeof record.storageKey === "string" && isStorageKey(record.storageKey);
     return Object.fromEntries(Object.entries(record).map(([key, item]) => {
         if (isCredentialKey(key)) {
             if (!issues.some((issue) => issue.code === "credential_redacted" && issue.nodeId === currentNodeId)) issues.push({ code: "credential_redacted", nodeId: currentNodeId });
             return [key, "[REDACTED]"];
         }
-        if (key === "content" && typeof record.storageKey === "string" && record.storageKey) return [key, record.storageKey];
-        if (isUrlKey(key) && typeof item === "string") return [key, redactUrl(item)];
-        if (isUrlKey(key) && Array.isArray(item)) return [key, item.map((entry) => typeof entry === "string" ? redactUrl(entry) : redactValue(entry, currentNodeId, issues))];
-        return [key, redactValue(item, currentNodeId, issues)];
+        if (key === "storageKey" && typeof item === "string" && !isStorageKey(item)) return [key, "[REDACTED]"];
+        if (key === "content" && validStorageKey) return [key, record.storageKey];
+        if (key === "content" && currentMediaContext && typeof item === "string" && /^https?:\/\//i.test(item)) return [key, redactUrl(item)];
+        if (validStorageKey && isMediaLocatorKey(key)) return [key, Array.isArray(item) ? [] : record.storageKey];
+        if (isUrlKey(key) && typeof item === "string") return [key, redactLocatorValue(item, currentMediaContext)];
+        if (isUrlKey(key) && Array.isArray(item)) return [key, item.map((entry) => typeof entry === "string" ? redactLocatorValue(entry, currentMediaContext) : redactValue(entry, currentNodeId, issues, currentMediaContext))];
+        return [key, redactValue(item, currentNodeId, issues, currentMediaContext)];
     }));
 }
 
@@ -218,6 +243,10 @@ function redactUrl(value: string) {
     } catch {
         return value;
     }
+}
+function redactLocatorValue(value: string, mediaContext: boolean) {
+    if (mediaContext && /^(blob:|data:)/i.test(value)) return "[REDACTED]";
+    return redactUrl(value);
 }
 function remoteSource(value: string | undefined) { return value && /^https?:\/\//i.test(value) ? redactUrl(value) : undefined; }
 function browserReaders(): CanvasExportReaders { return { getImageBlob, getMediaBlob }; }
@@ -235,11 +264,25 @@ export function parseCanvasProjectExportManifest(value: unknown): ImportableCanv
     const data = value as Record<string, unknown>;
     const validVersion = data.version === 3 || (data.version === 4 && data.kind === "canvas-project");
     if (data.app !== "infinite-canvas" || !validVersion || !Array.isArray(data.projects)) throw new CanvasExportError("invalid_manifest", "不支持的画布导入清单");
+    const paths = new Set<string>(["projects.json"]);
+    const storageKeys = new Map<string, { path: string; mimeType: string }>();
     for (const item of data.projects) {
         if (!item || typeof item !== "object" || !("project" in item) || !Array.isArray((item as { files?: unknown }).files)) throw new CanvasExportError("invalid_manifest", "画布导入清单缺少声明字段");
         for (const file of (item as { files: unknown[] }).files) {
             const declaration = file as Record<string, unknown> | null;
             if (!declaration || typeof declaration.storageKey !== "string" || typeof declaration.path !== "string" || typeof declaration.mimeType !== "string") throw new CanvasExportError("invalid_manifest", "画布导入清单缺少文件声明");
+            if (!isStorageKey(declaration.storageKey) || !isSafeArchivePath(declaration.path)) throw new CanvasExportError("invalid_manifest", "画布导入清单包含不安全的文件声明");
+            const normalizedPath = declaration.path.toLowerCase();
+            const mime = resolveMime(declaration.mimeType, declaration.storageKey);
+            if (!mime.ok) throw new CanvasExportError("invalid_manifest", "画布导入清单包含不支持的媒体类型");
+            const previous = storageKeys.get(declaration.storageKey);
+            if (previous) {
+                if (previous.path !== declaration.path || previous.mimeType !== mime.mimeType) throw new CanvasExportError("invalid_manifest", "画布导入清单包含冲突的存储声明");
+                continue;
+            }
+            if (paths.has(normalizedPath)) throw new CanvasExportError("invalid_manifest", "画布导入清单包含重复文件路径");
+            paths.add(normalizedPath);
+            storageKeys.set(declaration.storageKey, { path: declaration.path, mimeType: mime.mimeType });
         }
     }
     return value as ImportableCanvasExportFile;
@@ -265,6 +308,11 @@ function createPathResolver(reserved: string[] = []) {
     } };
 }
 function isStorageKey(value: string) { return STORAGE_KEY.test(value); }
+function isSafeArchivePath(value: string) {
+    if (!value || value.startsWith("/") || value.includes("\\") || /[\x00-\x1f\x7f]/.test(value)) return false;
+    const segments = value.split("/");
+    return segments.length > 1 && segments.every((segment) => segment && segment !== "." && segment !== "..");
+}
 function isCredentialKey(key: string) {
     const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[- ]/g, "_").toLowerCase();
     return /(^|_)(api_key|access_token|authorization|credential|password|secret|token|cookie|session|private_key)$/.test(normalized);
@@ -272,6 +320,15 @@ function isCredentialKey(key: string) {
 function isUrlKey(key: string) {
     const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[- ]/g, "_").toLowerCase();
     return /(^|_)(url|uri|href|src|endpoint)s?$/.test(normalized);
+}
+function isMediaLocatorKey(key: string) {
+    const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[- ]/g, "_").toLowerCase();
+    return normalized === "content" || normalized === "url" || normalized === "data_url" || normalized === "urls";
+}
+function isImplicitStorageReferenceField(key?: string) {
+    if (!key) return false;
+    const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[- ]/g, "_").toLowerCase();
+    return normalized === "references" || normalized === "url" || normalized === "data_url" || normalized === "content";
 }
 function resolveMime(mimeType: string, storageKey: string, nodeType?: string): { ok: true; mimeType: string; extension: string } | { ok: false; code: "unknown_mime_type" | "mime_type_mismatch" } {
     const normalized = mimeType.toLowerCase().trim();
