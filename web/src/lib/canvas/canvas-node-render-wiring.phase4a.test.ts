@@ -15,7 +15,7 @@ describe("Phase 4A Canvas node performance wiring", () => {
         const invocation = canvasNodeInvocation(source);
 
         expect(invocation).toContain("node.type === CanvasNodeType.Text");
-        expect(invocation).toContain("mentionReferencesByNodeId.get(node.id)");
+        expect(invocation).toContain("panelMentionReferencesByNodeId.get(node.id)");
         expect(invocation).toContain("EMPTY_REFERENCES");
     });
 
@@ -25,6 +25,17 @@ describe("Phase 4A Canvas node performance wiring", () => {
 
         expect(invocation).toContain("renderPanel={showPanel ? renderNodePanel : undefined}");
         expect(invocation).toContain('renderNodeContent={node.type === CanvasNodeType.Config ? renderNodeContentPanel : undefined}');
+    });
+
+    test("keeps non-Text panel references and explicit Plugin graph invalidation", async () => {
+        const project = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
+        const invocation = canvasNodeInvocation(project);
+        const panelStart = project.indexOf("const renderNodePanel = useCallback(");
+        const panelEnd = project.indexOf("const renderNodeContentPanel = useCallback(", panelStart);
+        const panel = project.slice(panelStart, panelEnd);
+
+        expect(panel).toContain("panelMentionReferencesByNodeId.get(panelNode.id)");
+        expect(invocation).toContain("pluginGraphRevision={isBuiltinType(node.type) ? undefined : pluginGraphRevision}");
     });
 
     test("keeps Plugin refresh props and Phase 2B recovery metadata intact", async () => {

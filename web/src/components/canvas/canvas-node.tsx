@@ -30,6 +30,7 @@ type CanvasNodeProps = {
     mentionReferences?: CanvasResourceReference[];
     pluginHost?: CanvasPluginHost;
     registryVersion?: number;
+    pluginGraphRevision?: object;
     renderPanel?: (node: CanvasNodeData) => ReactNode;
     renderNodeContent?: (node: CanvasNodeData) => ReactNode;
     batchCount?: number;

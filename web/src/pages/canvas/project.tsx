@@ -714,18 +714,18 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [connections, nodes]);
-    const mentionReferencesCacheRef = useRef(new Map<string, CanvasResourceReference[]>());
-    const mentionReferencesByNodeId = useMemo(() => {
-        const previous = mentionReferencesCacheRef.current;
+    const panelMentionReferencesCacheRef = useRef(new Map<string, CanvasResourceReference[]>());
+    const panelMentionReferencesByNodeId = useMemo(() => {
+        const previous = panelMentionReferencesCacheRef.current;
         const map = new Map<string, CanvasResourceReference[]>();
         nodes.forEach((node) => {
-            if (node.type !== CanvasNodeType.Text) return;
             const next = buildNodeMentionReferences(node, nodes, connections);
             map.set(node.id, reuseEquivalentResourceReferences(previous.get(node.id), next));
         });
-        mentionReferencesCacheRef.current = map;
+        panelMentionReferencesCacheRef.current = map;
         return map;
     }, [connections, nodes]);
+    const pluginGraphRevision = useMemo(() => ({}), [connections, nodeRegistryVersion, nodes]);
     const { applyAgentOps } = useAgentBridge({
         projectId,
         title: currentProject?.title,
@@ -2934,7 +2934,7 @@ function InfiniteCanvasPage() {
                 <CanvasNodePromptPanel
                     node={panelNode}
                     isRunning={runningNodeId === panelNode.id}
-                    mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || EMPTY_REFERENCES}
+                    mentionReferences={panelMentionReferencesByNodeId.get(panelNode.id) || EMPTY_REFERENCES}
                     onPromptChange={handleNodePromptChange}
                     onConfigChange={handleConfigNodeChange}
                     onGenerate={handleGenerateNode}
@@ -2946,7 +2946,7 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, renderPluginPanel, runningNodeId],
+        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, panelMentionReferencesByNodeId, renderPluginPanel, runningNodeId],
     );
 
     const renderNodeContentPanel = useCallback(
@@ -3072,9 +3072,10 @@ function InfiniteCanvasPage() {
                             batchRecovering={collapsingBatchIds.has(node.id)}
                             batchMotion={batchMotionById.get(node.id)}
                             showImageInfo={showImageInfo}
-                            mentionReferences={node.type === CanvasNodeType.Text ? mentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES : EMPTY_REFERENCES}
+                            mentionReferences={node.type === CanvasNodeType.Text ? panelMentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES : EMPTY_REFERENCES}
                             pluginHost={pluginHost}
                             registryVersion={nodeRegistryVersion}
+                            pluginGraphRevision={isBuiltinType(node.type) ? undefined : pluginGraphRevision}
                             renderPanel={showPanel ? renderNodePanel : undefined}
                             renderNodeContent={node.type === CanvasNodeType.Config ? renderNodeContentPanel : undefined}
                             onMouseDown={handleNodeMouseDown}
