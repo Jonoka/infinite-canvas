@@ -2,9 +2,11 @@ import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import { nanoid } from "nanoid";
+import type { AssetUploadCommit, AssetUploadOwnership } from "@/lib/canvas/asset-upload";
+import { commitAssetUpload } from "@/lib/canvas/asset-store-persistence";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import { cleanupUnusedImages, deleteStoredImages, resolveImageUrl, setImageBlob, uploadImage } from "@/services/image-storage";
+import { cleanupUnusedMedia, deleteStoredMedia, resolveMediaUrl, setMediaBlob } from "@/services/file-storage";
 
 export type AssetKind = "text" | "image" | "video";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -31,6 +33,8 @@ type AssetStore = {
     addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
     removeAsset: (id: string) => void;
+    removeAssetMetadata: (id: string) => void;
+    commitUploadedAssets: (upload: AssetUploadCommit, ownership: AssetUploadOwnership) => Promise<void>;
     replaceAssets: (assets: Asset[]) => void;
     cleanupImages: (extra?: unknown) => void;
 };
@@ -84,6 +88,25 @@ export const useAssetStore = create<AssetStore>()(
                     get().cleanupImages({ assets });
                     return { assets };
                 }),
+            removeAssetMetadata: (id) => set((state) => ({ assets: state.assets.filter((asset) => asset.id !== id) })),
+            commitUploadedAssets: (upload, ownership) => commitAssetUpload<Asset>(upload, ownership, {
+                getAssets: () => get().assets,
+                writeBlob: (file) => file.kind === "image" ? setImageBlob(file.storageKey, file.file) : setMediaBlob(file.storageKey, file.file),
+                deleteBlobs: async (files) => {
+                    await Promise.all([
+                        deleteStoredImages(files.filter((file) => file.kind === "image").map((file) => file.storageKey)),
+                        deleteStoredMedia(files.filter((file) => file.kind === "video").map((file) => file.storageKey)),
+                    ]);
+                },
+                persistAssets: async (assets) => { await assetStorage.setItem(ASSET_STORE_KEY, { state: { assets } as AssetStore, version: 0 }); },
+                publishAssets: (assets) => set({ assets }),
+                materialize: (commit, urls) => commit.assets.map((asset) => {
+                    const url = urls.get(asset.id) || "";
+                    return asset.kind === "image"
+                        ? ({ ...asset, coverUrl: url, data: { ...asset.data, dataUrl: url } } as ImageAsset)
+                        : ({ ...asset, data: { ...asset.data, url } } as VideoAsset);
+                }),
+            }),
             replaceAssets: (assets) => set({ assets }),
             cleanupImages: (extra) => {
                 window.setTimeout(async () => {

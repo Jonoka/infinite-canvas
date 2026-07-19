@@ -1,5 +1,6 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
+import { deleteStoredBlobUrl, replaceStoredBlobUrl } from "@/services/blob-url-lifecycle";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number; urls?: string[] };
 
@@ -32,8 +33,8 @@ export async function getMediaBlob(storageKey: string) {
 }
 
 export async function setMediaBlob(storageKey: string, blob: Blob) {
-    await store.setItem(storageKey, blob);
-    const url = URL.createObjectURL(blob);
+    const previous = objectUrls.get(storageKey);
+    const url = await replaceStoredBlobUrl({ storageKey, blob, currentUrl: previous, write: (key, value) => store.setItem(key, value), lifecycle: URL });
     objectUrls.set(storageKey, url);
     return url;
 }
@@ -41,10 +42,8 @@ export async function setMediaBlob(storageKey: string, blob: Blob) {
 export async function deleteStoredMedia(keys: Iterable<string>) {
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
-            const url = objectUrls.get(key);
-            if (url) URL.revokeObjectURL(url);
+            await deleteStoredBlobUrl({ storageKey: key, currentUrl: objectUrls.get(key), remove: (storageKey) => store.removeItem(storageKey), revokeObjectURL: URL.revokeObjectURL.bind(URL) });
             objectUrls.delete(key);
-            await store.removeItem(key);
         }),
     );
 }
@@ -55,7 +54,7 @@ export async function cleanupUnusedMedia(usedData: unknown) {
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);
     });
-    await Promise.all(unused.map((key) => store.removeItem(key)));
+    await deleteStoredMedia(unused);
 }
 
 export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()) {

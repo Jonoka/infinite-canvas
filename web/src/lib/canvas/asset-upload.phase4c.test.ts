@@ -1,15 +1,27 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+    ASSET_UPLOAD_HASH_CHUNK_BYTES,
     ASSET_UPLOAD_LIMITS,
+    hashAssetFile,
     planAssetUpload,
     runAssetUpload,
+    sniffMime,
     type AssetUploadRunnerDependencies,
 } from "./asset-upload";
 
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG = [0xff, 0xd8, 0xff, 0xe0];
 const GIF = [...new TextEncoder().encode("GIF89a")];
+
+function ftyp(...brands: string[]) {
+    const bytes = new Uint8Array(16 + Math.max(0, brands.length - 1) * 4);
+    bytes[3] = bytes.length;
+    bytes.set(new TextEncoder().encode("ftyp"), 4);
+    bytes.set(new TextEncoder().encode(brands[0]), 8);
+    brands.slice(1).forEach((brand, index) => bytes.set(new TextEncoder().encode(brand), 16 + index * 4));
+    return [...bytes];
+}
 
 function file(bytes: number[], name: string, type: string) {
     return new File([new Uint8Array(bytes)], name, { type, lastModified: 1 });
@@ -76,6 +88,42 @@ describe("Phase 4C asset upload planner", () => {
         expect(plan.items[0]).toMatchObject({ status: "rejected", error: { code: "duplicate_content", duplicateOf: { type: "existing", assetId: "existing" } } });
         expect(plan.items[1]).toMatchObject({ status: "rejected", error: { code: "duplicate_content" } });
         expect(plan.items[2].status).toBe("ready");
+    });
+
+    test("sniffs ISO BMFF major and compatible brands into canonical MOV/MP4 MIME", async () => {
+        expect(sniffMime(new Uint8Array(ftyp("qt  ")))).toBe("video/quicktime");
+        expect(sniffMime(new Uint8Array(ftyp("isom", "qt  ")))).toBe("video/quicktime");
+        expect(sniffMime(new Uint8Array(ftyp("isom", "mp42")))).toBe("video/mp4");
+        const mov = await planAssetUpload([file(ftyp("qt  "), "movie.mov", "video/quicktime")], []);
+        const lied = await planAssetUpload([file(ftyp("qt  "), "movie.mp4", "video/mp4")], []);
+        expect(mov.items[0]).toMatchObject({ status: "ready", mimeType: "video/quicktime" });
+        expect(lied.items[0]).toMatchObject({ status: "rejected", error: { code: "type_signature_mismatch" } });
+    });
+
+    test("hashes fixed-size chunks and observes abort between chunk reads", async () => {
+        const controller = new AbortController();
+        const reads: Array<[number, number]> = [];
+        const blob = new Blob([new Uint8Array(ASSET_UPLOAD_HASH_CHUNK_BYTES + 1)]);
+        const original = blob.slice.bind(blob);
+        blob.slice = ((start?: number, end?: number, type?: string) => {
+            reads.push([start || 0, end || blob.size]);
+            const chunk = original(start, end, type);
+            if (reads.length === 1) queueMicrotask(() => controller.abort());
+            return chunk;
+        }) as Blob["slice"];
+        await expect(hashAssetFile(blob, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+        expect(reads).toEqual([[0, ASSET_UPLOAD_HASH_CHUNK_BYTES]]);
+    });
+
+    test("charges duplicate candidates to one examined-byte budget", async () => {
+        const duplicate = file([...PNG, 1], "duplicate.png", "image/png");
+        const digestPlan = await planAssetUpload([duplicate], []);
+        const digest = digestPlan.items[0].status === "ready" ? digestPlan.items[0].sha256 : "";
+        const next = file([...PNG, 2], "next.png", "image/png");
+        const plan = await planAssetUpload([duplicate, next], [{ assetId: "old", sha256: digest }], { limits: { maxTotalBytes: duplicate.size + next.size - 1 } });
+        expect(plan.items[0]).toMatchObject({ status: "rejected", error: { code: "duplicate_content" } });
+        expect(plan.items[1]).toMatchObject({ status: "rejected", error: { code: "total_file_size_limit" } });
+        expect(plan.examinedBytes).toBe(duplicate.size);
     });
 });
 
@@ -154,7 +202,19 @@ describe("Phase 4C asset upload runner", () => {
         }), { signal: new AbortController().signal, isCurrent: () => false });
 
         expect(commits).toBe(0);
-        expect(revoked).toEqual(["blob:phase4c-0"]);
+        expect(revoked).toEqual([]);
+        expect(result.items[0]).toMatchObject({ status: "failed", error: { code: "stale_batch" } });
+    });
+
+    test("passes ownership into commit and rechecks it after commit completes", async () => {
+        const plan = await planAssetUpload([file([...PNG, 1], "one.png", "image/png")], []);
+        let current = true;
+        let receivedSignal: AbortSignal | undefined;
+        const controller = new AbortController();
+        const result = await runAssetUpload(plan, dependencies({
+            commitUpload: async (_commit, ownership) => { receivedSignal = ownership.signal; current = false; },
+        }), { signal: controller.signal, isCurrent: () => current });
+        expect(receivedSignal).toBe(controller.signal);
         expect(result.items[0]).toMatchObject({ status: "failed", error: { code: "stale_batch" } });
     });
 });

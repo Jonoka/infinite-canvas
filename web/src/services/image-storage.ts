@@ -2,6 +2,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
+import { deleteStoredBlobUrl, replaceStoredBlobUrl } from "@/services/blob-url-lifecycle";
 
 export type UploadedImage = {
     url: string;
@@ -41,8 +42,8 @@ export async function getImageBlob(storageKey: string) {
 }
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
-    await store.setItem(storageKey, blob);
-    const url = URL.createObjectURL(blob);
+    const previous = objectUrls.get(storageKey);
+    const url = await replaceStoredBlobUrl({ storageKey, blob, currentUrl: previous, write: (key, value) => store.setItem(key, value), lifecycle: URL });
     objectUrls.set(storageKey, url);
     return url;
 }
@@ -56,10 +57,8 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
 export async function deleteStoredImages(keys: Iterable<string>) {
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
-            const url = objectUrls.get(key);
-            if (url) URL.revokeObjectURL(url);
+            await deleteStoredBlobUrl({ storageKey: key, currentUrl: objectUrls.get(key), remove: (storageKey) => store.removeItem(storageKey), revokeObjectURL: URL.revokeObjectURL.bind(URL) });
             objectUrls.delete(key);
-            await store.removeItem(key);
         }),
     );
 }
