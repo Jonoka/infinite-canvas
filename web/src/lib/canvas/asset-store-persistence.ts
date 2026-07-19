@@ -1,0 +1,66 @@
+import { enqueueAssetMutation } from "./asset-repository";
+import type { AssetUploadCommit, AssetUploadOwnership } from "./asset-upload";
+
+export type StoredUploadAsset = AssetUploadCommit["assets"][number] & { data: AssetUploadCommit["assets"][number]["data"] & { dataUrl?: string; url?: string } };
+export type AssetCommitDependencies<TAsset> = {
+    getAssets: () => TAsset[];
+    readDurableAssets: () => Promise<TAsset[]>;
+    writeBlob: (file: AssetUploadCommit["files"][number]) => Promise<string>;
+    persistAssets: (assets: TAsset[]) => Promise<void>;
+    publishAssets: (assets: TAsset[]) => void;
+    materialize: (upload: AssetUploadCommit, urls: Map<string, string>) => TAsset[];
+};
+
+function checkOwnership(ownership: AssetUploadOwnership) {
+    if (ownership.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError", uploadCode: "aborted" });
+    if (!ownership.isCurrent()) throw Object.assign(new Error("stale"), { uploadCode: "stale_batch" });
+}
+
+/** Stages Blobs, commits metadata, then publishes. Orphan cleanup is deferred to reference-aware GC. */
+export function commitAssetUpload<TAsset extends { id: string }>(upload: AssetUploadCommit, ownership: AssetUploadOwnership, dependencies: AssetCommitDependencies<TAsset>) {
+    return enqueueAssetMutation(async () => {
+        let metadataCommitted = false;
+        try {
+            checkOwnership(ownership);
+            const urls = new Map<string, string>();
+            for (const file of upload.files) {
+                checkOwnership(ownership);
+                urls.set(file.assetId, await dependencies.writeBlob(file));
+                checkOwnership(ownership);
+            }
+            // Read inside the repository lock. Never restore an upload-time snapshot.
+            const next = [...dependencies.materialize(upload, urls), ...dependencies.getAssets()];
+            checkOwnership(ownership);
+            await dependencies.persistAssets(next);
+            metadataCommitted = true;
+            checkOwnership(ownership);
+            dependencies.publishAssets(next);
+            checkOwnership(ownership);
+        } catch (error) {
+            if (!metadataCommitted) throw error;
+
+            const batchIds = new Set(upload.assets.map((asset) => asset.id));
+            const compensated = dependencies.getAssets().filter((asset) => !batchIds.has(asset.id));
+            try {
+                await dependencies.persistAssets(compensated);
+                dependencies.publishAssets(compensated);
+            } catch (rollbackError) {
+                // Durable metadata may still reference this batch: retain every Blob and republish durable truth.
+                let durableReadError: unknown;
+                try {
+                    dependencies.publishAssets(await dependencies.readDurableAssets());
+                } catch (readError) {
+                    durableReadError = readError;
+                }
+                throw Object.assign(new Error("asset upload failed and durable rollback failed; staged blobs retained"), {
+                    cause: error,
+                    rollbackError,
+                    durableReadError,
+                    uploadCode: "persistence_failed" as const,
+                    rollback: "failed_blobs_retained" as const,
+                });
+            }
+            throw error;
+        }
+    });
+}

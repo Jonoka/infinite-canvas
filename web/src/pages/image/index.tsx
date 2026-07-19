@@ -17,7 +17,7 @@ import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { createImageWorkbenchActions } from "./image-generation-actions";
 import { confirmLiteToProFallback } from "@/lib/lite-pro-fallback-consent";
-import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import type { ReferenceImage } from "@/types/image";
@@ -231,8 +231,9 @@ export default function ImagePage() {
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
-        const stored = await uploadImage(image.dataUrl);
-        addAsset({
+        try {
+            const stored = await uploadImage(image.dataUrl);
+            await addAsset({
             kind: "image",
             title: `生成结果 ${index + 1}`,
             coverUrl: stored.url,
@@ -240,8 +241,11 @@ export default function ImagePage() {
             source: "生图工作台",
             data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
             metadata: { source: "image-page", prompt },
-        });
-        message.success("已加入我的资产");
+            });
+            message.success("已加入我的资产");
+        } catch {
+            message.error("保存资产失败；若媒体已写入，将由延迟清理安全回收，请重试");
+        }
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {
@@ -267,8 +271,7 @@ export default function ImagePage() {
     };
 
     const deleteSelectedLogs = () => {
-        const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
-        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
+        void Promise.all(selectedLogIds.map((id) => logStore.removeItem(id))).then(refreshLogs);
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);

@@ -1,10 +1,13 @@
 import { create } from "zustand";
-import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
-
 import { nanoid } from "nanoid";
+
+import { hydrateAssetRepository, mergeAssetRepository, mutateAssetRepository, type AssetRepositoryDependencies } from "@/lib/canvas/asset-repository";
+import { planAssetRemoval } from "@/lib/canvas/asset-removal";
+import type { AssetUploadCommit, AssetUploadOwnership } from "@/lib/canvas/asset-upload";
+import { commitAssetUpload } from "@/lib/canvas/asset-store-persistence";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import { resolveImageUrl, setImageBlob, uploadImage } from "@/services/image-storage";
+import { resolveMediaUrl, setMediaBlob } from "@/services/file-storage";
 
 export type AssetKind = "text" | "image" | "video";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -25,81 +28,109 @@ type AssetBase<T extends AssetKind> = {
     metadata?: Record<string, unknown>;
 };
 
+type NewAsset = Omit<Asset, "id" | "createdAt" | "updatedAt">;
 type AssetStore = {
     hydrated: boolean;
+    writeReady: boolean;
+    hydrationError: string | null;
     assets: Asset[];
-    addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
-    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
-    removeAsset: (id: string) => void;
-    replaceAssets: (assets: Asset[]) => void;
+    addAsset: (asset: NewAsset) => Promise<string>;
+    updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => Promise<void>;
+    removeAsset: (id: string) => Promise<void>;
+    commitUploadedAssets: (upload: AssetUploadCommit, ownership: AssetUploadOwnership) => Promise<void>;
+    replaceAssets: (assets: Asset[]) => Promise<void>;
+    mergeAssets: (assets: Asset[], merge: (latest: Asset[], remote: Asset[]) => Asset[]) => Promise<Asset[]>;
     cleanupImages: (extra?: unknown) => void;
 };
 
 const ASSET_STORE_KEY = "infinite-canvas:asset_store";
+type DurableState = { state: { assets: Asset[] }; version: number };
 
-const assetStorage: PersistStorage<AssetStore> = {
-    getItem: async (name) => {
-        const value = await localForageStorage.getItem(name);
-        if (!value) return null;
-        const parsed = JSON.parse(value) as StorageValue<AssetStore>;
-        parsed.state.assets = await Promise.all(
-            parsed.state.assets.map(async (asset) => {
-                if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind !== "image") return asset;
-                if (asset.data.storageKey)
-                    return {
-                        ...asset,
-                        coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
-                        data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
-                    };
-                if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
-                const image = await uploadImage(asset.data.dataUrl);
-                return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
-            }),
-        );
-        return parsed;
-    },
-    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(value)),
-    removeItem: (name) => localForageStorage.removeItem(name),
+async function readDurableAssets() {
+    const value = await localForageStorage.getItem(ASSET_STORE_KEY);
+    if (!value) return [];
+    return (JSON.parse(value) as DurableState).state.assets || [];
+}
+async function persistAssets(assets: Asset[]) {
+    await localForageStorage.setItem(ASSET_STORE_KEY, JSON.stringify({ state: { assets }, version: 0 } satisfies DurableState));
+}
+async function hydrateAssets(assets: Asset[]): Promise<{ assets: Asset[]; requiresPersist: boolean }> {
+    let requiresPersist = false;
+    const hydrated = await Promise.all(assets.map(async (asset) => {
+        if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
+        if (asset.kind !== "image") return asset;
+        if (asset.data.storageKey) return { ...asset, coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl, data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) } };
+        if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
+        const image = await uploadImage(asset.data.dataUrl);
+        requiresPersist = true;
+        return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } } as Asset;
+    }));
+    return { assets: hydrated, requiresPersist };
+}
+
+let getAssetState!: () => AssetStore;
+let setAssetState!: (patch: Partial<AssetStore>) => void;
+const repository: AssetRepositoryDependencies<Asset> = {
+    isWriteReady: () => getAssetState().writeReady,
+    getAssets: (): Asset[] => getAssetState().assets,
+    persistAssets,
+    publishAssets: (assets: Asset[]) => setAssetState({ assets }),
 };
 
-export const useAssetStore = create<AssetStore>()(
-    persist(
-        (set, get) => ({
-            hydrated: false,
-            assets: [],
-            addAsset: (asset) => {
-                const now = new Date().toISOString();
-                const id = nanoid();
-                set((state) => ({ assets: [{ ...asset, id, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
-                return id;
-            },
-            updateAsset: (id, patch) =>
-                set((state) => ({
-                    assets: state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset)),
-                })),
-            removeAsset: (id) =>
-                set((state) => {
-                    const assets = state.assets.filter((asset) => asset.id !== id);
-                    get().cleanupImages({ assets });
-                    return { assets };
-                }),
-            replaceAssets: (assets) => set({ assets }),
-            cleanupImages: (extra) => {
-                window.setTimeout(async () => {
-                    const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
-                    await cleanupUnusedImages({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
-                    await cleanupUnusedMedia({ assets: get().assets, projects: useCanvasStore.getState().projects, extra });
-                }, 0);
-            },
-        }),
-        {
-            name: ASSET_STORE_KEY,
-            storage: assetStorage,
-            partialize: (state) => ({ assets: state.assets }) as StorageValue<AssetStore>["state"],
-            onRehydrateStorage: () => () => {
-                useAssetStore.setState({ hydrated: true });
-            },
-        },
-    ),
-);
+export const useAssetStore = create<AssetStore>()((set, get) => ({
+    hydrated: false,
+    writeReady: false,
+    hydrationError: null,
+    assets: [],
+    addAsset: (asset) => {
+        const now = new Date().toISOString();
+        const id = nanoid();
+        return mutateAssetRepository(repository, (latest) => ({ assets: [{ ...asset, id, createdAt: now, updatedAt: now } as Asset, ...latest], result: id }));
+    },
+    updateAsset: (id, patch) => mutateAssetRepository(repository, (latest) => ({
+        assets: latest.map((asset) => asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset), result: undefined,
+    })),
+    removeAsset: async (id) => {
+        const { useCanvasStore } = await import("@/stores/canvas/use-canvas-store");
+        await mutateAssetRepository(repository, (latest) => {
+            // Reference check and metadata decision share the repository lock. Blob GC is tombstoned/deferred.
+            planAssetRemoval(id, latest, useCanvasStore.getState().projects);
+            return { assets: latest.filter((asset) => asset.id !== id), result: undefined };
+        });
+    },
+    commitUploadedAssets: (upload, ownership) => {
+        if (!get().writeReady) return Promise.reject(new Error("asset_repository_not_write_ready"));
+        return commitAssetUpload<Asset>(upload, ownership, {
+            getAssets: () => get().assets,
+            readDurableAssets: async () => (await hydrateAssets(await readDurableAssets())).assets,
+            writeBlob: (file) => file.kind === "image" ? setImageBlob(file.storageKey, file.file) : setMediaBlob(file.storageKey, file.file),
+
+            persistAssets,
+            publishAssets: (assets) => set({ assets }),
+            materialize: (commit, urls) => commit.assets.map((asset) => {
+                const url = urls.get(asset.id) || "";
+                return asset.kind === "image" ? ({ ...asset, coverUrl: url, data: { ...asset.data, dataUrl: url } } as ImageAsset) : ({ ...asset, data: { ...asset.data, url } } as VideoAsset);
+            }),
+        });
+    },
+    replaceAssets: (assets) => mutateAssetRepository(repository, () => ({ assets, result: undefined })),
+    mergeAssets: (assets, merge) => mergeAssetRepository(repository, assets, merge),
+    // Physical cleanup is deliberately deferred until cross-store references can be rechecked safely.
+    cleanupImages: () => undefined,
+}));
+getAssetState = useAssetStore.getState;
+setAssetState = (patch) => useAssetStore.setState(patch);
+
+const hydratePromise = (async () => {
+    try {
+        await hydrateAssetRepository({
+            loadAssets: async () => hydrateAssets(await readDurableAssets()),
+            persistAssets,
+            publishAssets: (assets) => setAssetState({ assets }),
+        });
+        setAssetState({ hydrated: true, writeReady: true, hydrationError: null });
+    } catch (error) {
+        setAssetState({ hydrated: true, writeReady: false, hydrationError: error instanceof Error ? error.message : "asset_hydration_failed" });
+    }
+});
+void hydratePromise;

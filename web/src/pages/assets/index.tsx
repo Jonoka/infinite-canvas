@@ -37,6 +37,8 @@ export default function AssetsPage() {
     const imageInputRef = useRef<HTMLInputElement>(null);
     const assetInputRef = useRef<HTMLInputElement>(null);
     const assets = useAssetStore((state) => state.assets);
+    const writeReady = useAssetStore((state) => state.writeReady);
+    const hydrationError = useAssetStore((state) => state.hydrationError);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
@@ -76,6 +78,7 @@ export default function AssetsPage() {
     }, [filteredAssets.length, pageSize]);
 
     const openCreate = () => {
+        if (!writeReady) return;
         setEditingAsset(null);
         setImageDraft(null);
         setFormKind("text");
@@ -100,8 +103,10 @@ export default function AssetsPage() {
     };
 
     const saveAsset = async () => {
-        const values = await form.validateFields();
-        const base = {
+        if (!writeReady) return message.error(hydrationError ? "资产加载失败，当前禁止写入" : "资产仍在加载，请稍候");
+        try {
+            const values = await form.validateFields();
+            const base = {
             title: values.title.trim(),
             coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
             tags: values.tags || [],
@@ -112,18 +117,22 @@ export default function AssetsPage() {
 
         if (values.kind === "text") {
             const asset = { ...base, kind: "text" as const, data: { content: (values.content || "").trim() } };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
         } else {
             if (!imageDraft) {
                 message.error("请选择图片文件");
                 return;
             }
             const asset = { ...base, kind: "image" as const, data: imageDraft };
-            editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset);
+            await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
         }
 
-        message.success(editingAsset ? "资产已更新" : "资产已保存");
-        setIsAssetOpen(false);
+            message.success(editingAsset ? "资产已更新" : "资产已保存");
+            setIsAssetOpen(false);
+        } catch (error) {
+            if ((error as { errorFields?: unknown }).errorFields) return;
+            message.error("保存资产失败，请重试");
+        }
     };
 
     const readCoverFile = async (file?: File) => {
@@ -133,7 +142,7 @@ export default function AssetsPage() {
     };
 
     const readImageFile = async (file?: File) => {
-        if (!file || !file.type.startsWith("image/")) return;
+        if (!file || !writeReady || !file.type.startsWith("image/")) return;
         const image = await uploadImage(file);
         const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
         setImageDraft(draft);
@@ -160,16 +169,16 @@ export default function AssetsPage() {
     };
 
     const importAssetZip = async (file?: File) => {
-        if (!file) return;
+        if (!file || !writeReady) return;
         try {
             const importedAssets = await readAssetPackage(file);
-            importedAssets.forEach((asset) => {
+            for (const asset of importedAssets) {
                 const payload = { ...asset } as Record<string, unknown>;
                 delete payload.id;
                 delete payload.createdAt;
                 delete payload.updatedAt;
-                addAsset(payload as Parameters<typeof addAsset>[0]);
-            });
+                await addAsset(payload as Parameters<typeof addAsset>[0]);
+            }
             message.success(`已导入 ${importedAssets.length} 个资产`);
         } catch {
             message.error("导入失败，请选择有效的资产压缩包");
@@ -178,11 +187,15 @@ export default function AssetsPage() {
         }
     };
 
-    const confirmDelete = () => {
+    const confirmDelete = async () => {
         if (!deletingAsset) return;
-        removeAsset(deletingAsset.id);
-        message.success("资产已删除");
-        setDeletingAsset(null);
+        try {
+            await removeAsset(deletingAsset.id);
+            message.success("资产已删除");
+            setDeletingAsset(null);
+        } catch {
+            message.error("删除失败，请重试");
+        }
     };
 
     return (
@@ -243,6 +256,7 @@ export default function AssetsPage() {
                                 </button>
                                 <button
                                     type="button"
+                                    disabled={!writeReady}
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={() => assetInputRef.current?.click()}
                                 >
@@ -250,6 +264,7 @@ export default function AssetsPage() {
                                 </button>
                                 <button
                                     type="button"
+                                    disabled={!writeReady}
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={openCreate}
                                 >
@@ -303,7 +318,7 @@ export default function AssetsPage() {
                         <Form.Item name="coverUrl" label="封面 URL">
                             <Space.Compact className="w-full">
                                 <Input placeholder="可粘贴图片 URL，也可以上传本地封面" />
-                                <Button icon={<Upload className="size-3.5" />} onClick={() => coverInputRef.current?.click()}>
+                                <Button disabled={!writeReady} icon={<Upload className="size-3.5" />} onClick={() => coverInputRef.current?.click()}>
                                     上传
                                 </Button>
                             </Space.Compact>
@@ -395,7 +410,7 @@ export default function AssetsPage() {
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
 
-            <Modal title="删除资产" open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={confirmDelete} okText="删除" okButtonProps={{ danger: true }} cancelText="取消">
+            <Modal title="删除资产" open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={() => void confirmDelete()} okText="删除" okButtonProps={{ danger: true, disabled: !writeReady }} cancelText="取消">
                 确定删除「{deletingAsset?.title}」吗？删除后会从我的资产中移除。
             </Modal>
         </div>
