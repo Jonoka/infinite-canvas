@@ -230,6 +230,6 @@ describe("Phase 4B import manifest guard", () => {
         expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject }] })).toThrow(CanvasExportError);
         expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "../escape.png", mimeType: "image/png" }] }] })).toThrow(CanvasExportError);
         expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "projects.json", mimeType: "image/png" }] }] })).toThrow(CanvasExportError);
-        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "projects/p/files/a.png", mimeType: "video/mp4" }] }] })).toThrow(CanvasExportError);
+        expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "canvas-project", projects: [{ project: baseProject, files: [{ storageKey: "image:a", path: "projects/p/files/a.png", mimeType: "video/mp4" }] }] })).toThrow(CanvasExportError);
     });
 });
