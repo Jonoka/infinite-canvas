@@ -50,6 +50,7 @@ import { commitCanvasVideoResultIfCurrent } from "@/lib/canvas/canvas-generation
 import { createImageWorkbenchActions } from "@/pages/image/image-generation-actions";
 import { confirmLiteToProFallback } from "@/lib/lite-pro-fallback-consent";
 import { buildNodeMentionReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { reuseEquivalentBatchMotion, reuseEquivalentResourceReferences, type CanvasBatchMotion } from "@/lib/canvas/canvas-node-derived-props";
 import { exportCanvasProjects } from "@/lib/canvas/canvas-export";
 import { applyNodeConfigPatch, audioMetadata, buildAudioGenerationMetadata, buildImageGenerationMetadata, createCanvasNode, imageMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import { findContainingGroupId, findGroupDropTarget, getConnectionTargetAnchor, isHiddenBatchChild, isHiddenBatchConnectionEndpoint, normalizeConnection, snapNodesIntoGroup } from "@/lib/canvas/canvas-node-geometry";
@@ -671,8 +672,10 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [nodes]);
+    const batchMotionCacheRef = useRef(new Map<string, CanvasBatchMotion>());
     const batchMotionById = useMemo(() => {
-        const map = new Map<string, { x: number; y: number; index: number }>();
+        const previous = batchMotionCacheRef.current;
+        const map = new Map<string, CanvasBatchMotion>();
         nodes.forEach((node) => {
             const rootId = node.metadata?.batchRootId;
             if (!rootId) return;
@@ -680,8 +683,10 @@ function InfiniteCanvasPage() {
             const index = root?.metadata?.batchChildIds?.indexOf(node.id) ?? 0;
             const stackX = root ? root.position.x + 34 + index * 14 : node.position.x;
             const stackY = root ? root.position.y + 14 + index * 8 : node.position.y;
-            map.set(node.id, { x: stackX - node.position.x, y: stackY - node.position.y, index: Math.max(index, 0) });
+            const next = { x: stackX - node.position.x, y: stackY - node.position.y, index: Math.max(index, 0) };
+            map.set(node.id, reuseEquivalentBatchMotion(previous.get(node.id), next) || next);
         });
+        batchMotionCacheRef.current = map;
         return map;
     }, [nodeById, nodes]);
     const relatedHighlight = useMemo(() => {
@@ -709,11 +714,18 @@ function InfiniteCanvasPage() {
         });
         return map;
     }, [connections, nodes]);
-    const mentionReferencesByNodeId = useMemo(() => {
-        const map = new Map<string, ReturnType<typeof buildNodeMentionReferences>>();
-        nodes.forEach((node) => map.set(node.id, buildNodeMentionReferences(node, nodes, connections)));
+    const panelMentionReferencesCacheRef = useRef(new Map<string, CanvasResourceReference[]>());
+    const panelMentionReferencesByNodeId = useMemo(() => {
+        const previous = panelMentionReferencesCacheRef.current;
+        const map = new Map<string, CanvasResourceReference[]>();
+        nodes.forEach((node) => {
+            const next = buildNodeMentionReferences(node, nodes, connections);
+            map.set(node.id, reuseEquivalentResourceReferences(previous.get(node.id), next));
+        });
+        panelMentionReferencesCacheRef.current = map;
         return map;
     }, [connections, nodes]);
+    const pluginGraphRevision = useMemo(() => ({}), [connections, nodeRegistryVersion, nodes]);
     const { applyAgentOps } = useAgentBridge({
         projectId,
         title: currentProject?.title,
@@ -2922,7 +2934,7 @@ function InfiniteCanvasPage() {
                 <CanvasNodePromptPanel
                     node={panelNode}
                     isRunning={runningNodeId === panelNode.id}
-                    mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || EMPTY_REFERENCES}
+                    mentionReferences={panelMentionReferencesByNodeId.get(panelNode.id) || EMPTY_REFERENCES}
                     onPromptChange={handleNodePromptChange}
                     onConfigChange={handleConfigNodeChange}
                     onGenerate={handleGenerateNode}
@@ -2934,7 +2946,7 @@ function InfiniteCanvasPage() {
                     }}
                 />
             ),
-        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, renderPluginPanel, runningNodeId],
+        [configInputsById, confirmStopGeneration, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, panelMentionReferencesByNodeId, renderPluginPanel, runningNodeId],
     );
 
     const renderNodeContentPanel = useCallback(
@@ -3037,8 +3049,10 @@ function InfiniteCanvasPage() {
                         {connectingParams ? <ActiveConnectionPath node={nodeById.get(connectingParams.nodeId)} handle={connectingParams} mouseWorld={mouseWorld} target={connectionTargetNodeId ? nodeById.get(connectionTargetNodeId) : undefined} /> : null}
                     </svg>
 
-                    {visibleNodes.map((node) => (
-                        <CanvasNode
+                    {visibleNodes.map((node) => {
+                        const showPanel = dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel;
+                        return (
+                            <CanvasNode
                             key={node.id}
                             data={node}
                             scale={viewport.k}
@@ -3048,7 +3062,7 @@ function InfiniteCanvasPage() {
                             isConnectionTarget={connectionTargetNodeId === node.id}
                             isConnecting={Boolean(connectingParams)}
                             editRequestNonce={editingNodeId === node.id ? editRequestNonce : 0}
-                            showPanel={dialogNodeId === node.id && !selectionBox && !getNodeDefinition(node.type)?.hidePanel}
+                            showPanel={showPanel}
                             batchCount={batchChildCountById.get(node.id) || 0}
                             groupChildCount={groupChildCountById.get(node.id) || 0}
                             isGroupDropTarget={dropTargetGroupId === node.id}
@@ -3058,11 +3072,12 @@ function InfiniteCanvasPage() {
                             batchRecovering={collapsingBatchIds.has(node.id)}
                             batchMotion={batchMotionById.get(node.id)}
                             showImageInfo={showImageInfo}
-                            mentionReferences={mentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES}
+                            mentionReferences={node.type === CanvasNodeType.Text ? panelMentionReferencesByNodeId.get(node.id) || EMPTY_REFERENCES : EMPTY_REFERENCES}
                             pluginHost={pluginHost}
                             registryVersion={nodeRegistryVersion}
-                            renderPanel={renderNodePanel}
-                            renderNodeContent={renderNodeContentPanel}
+                            pluginGraphRevision={isBuiltinType(node.type) ? undefined : pluginGraphRevision}
+                            renderPanel={showPanel ? renderNodePanel : undefined}
+                            renderNodeContent={node.type === CanvasNodeType.Config ? renderNodeContentPanel : undefined}
                             onMouseDown={handleNodeMouseDown}
                             onSelectCapture={handleNodeSelectCapture}
                             onHoverStart={handleNodeHoverStart}
@@ -3077,8 +3092,9 @@ function InfiniteCanvasPage() {
                             onGenerateImage={generateImageFromTextNode}
                             onViewImage={handleNodeViewImage}
                             onContextMenu={handleNodeContextMenu}
-                        />
-                    ))}
+                            />
+                        );
+                    })}
 
                     {selectionBox ? (
                         <div
