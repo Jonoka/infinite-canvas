@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 function canvasNodeInvocation(source: string) {
-    const start = source.indexOf("{visibleNodes.map((node) => (");
+    const start = source.indexOf("{visibleNodes.map((node) => {");
     const end = source.indexOf("</CanvasNode>", start);
     const selfClosingEnd = source.indexOf("/>", start);
     expect(start).toBeGreaterThanOrEqual(0);
