@@ -146,6 +146,17 @@ describe("Phase 4B current-canvas export contract", () => {
         expect(serialized).not.toContain("key-secret");
         expect(serialized).not.toContain("payload-secret");
         expect(serialized).not.toContain("transient-secret");
+
+        const dataContent = mediaNode("data-content", CanvasNodeType.Image, "data", "", "data:image/png;base64,content-payload-secret");
+        const blobContent = mediaNode("blob-content", CanvasNodeType.Video, "blob", "", "blob:content-transient-secret");
+        const nestedPlugin = mediaNode("nested-plugin", "example:media", "plugin", "");
+        nestedPlugin.metadata = { ...nestedPlugin.metadata, nested: { dataUrl: "data:image/png;base64,plugin-payload-secret", url: "blob:plugin-transient-secret" } } as typeof nestedPlugin.metadata;
+        const locationPlan = await buildCanvasProjectExport({ ...baseProject, nodes: [dataContent, blobContent, nestedPlugin] }, readers({}));
+        const locationSerialized = JSON.stringify(locationPlan.manifest);
+        expect(locationSerialized).not.toContain("content-payload-secret");
+        expect(locationSerialized).not.toContain("content-transient-secret");
+        expect(locationSerialized).not.toContain("plugin-payload-secret");
+        expect(locationSerialized).not.toContain("plugin-transient-secret");
     });
 
     test("sanitizes traversal and resolves colliding ZIP paths globally", async () => {
@@ -211,6 +222,8 @@ describe("Phase 4B import manifest guard", () => {
     test("accepts runtime v3 and v4 canvas-project manifests", () => {
         expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, exportedAt: "", projects: [project] }).version).toBe(3);
         expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "canvas-project", exportedAt: "", projects: [project], summary: {} }).version).toBe(4);
+        const legacyFile = { storageKey: "video:legacy", path: "projects/old/files/video_legacy.bin", mimeType: "application/octet-stream" };
+        expect(parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 3, exportedAt: "", projects: [{ project: baseProject, files: [legacyFile] }, { project: { ...baseProject, id: "second" }, files: [{ ...legacyFile, path: "projects/second/files/video_legacy.bin" }] }] }).version).toBe(3);
     });
     test("rejects selected-node and unsafe, missing, or conflicting file declarations", () => {
         expect(() => parseCanvasProjectExportManifest({ app: "infinite-canvas", version: 4, kind: "selected-node-media", projects: [] })).toThrow(CanvasExportError);

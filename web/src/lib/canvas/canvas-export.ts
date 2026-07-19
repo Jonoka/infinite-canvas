@@ -223,10 +223,10 @@ function redactValue(value: unknown, nodeId: string | undefined, issues: CanvasE
         }
         if (key === "storageKey" && typeof item === "string" && !isStorageKey(item)) return [key, "[REDACTED]"];
         if (key === "content" && validStorageKey) return [key, record.storageKey];
-        if (key === "content" && currentMediaContext && typeof item === "string" && /^https?:\/\//i.test(item)) return [key, redactUrl(item)];
+        if (key === "content" && currentMediaContext && typeof item === "string") return [key, redactLocatorValue(item, true)];
         if (validStorageKey && isMediaLocatorKey(key)) return [key, Array.isArray(item) ? [] : record.storageKey];
-        if (isUrlKey(key) && typeof item === "string") return [key, redactLocatorValue(item, currentMediaContext)];
-        if (isUrlKey(key) && Array.isArray(item)) return [key, item.map((entry) => typeof entry === "string" ? redactLocatorValue(entry, currentMediaContext) : redactValue(entry, currentNodeId, issues, currentMediaContext))];
+        if (isUrlKey(key) && typeof item === "string") return [key, redactLocatorValue(item, currentMediaContext || isMediaLocatorKey(key))];
+        if (isUrlKey(key) && Array.isArray(item)) return [key, item.map((entry) => typeof entry === "string" ? redactLocatorValue(entry, currentMediaContext || isMediaLocatorKey(key)) : redactValue(entry, currentNodeId, issues, currentMediaContext))];
         return [key, redactValue(item, currentNodeId, issues, currentMediaContext)];
     }));
 }
@@ -264,6 +264,7 @@ export function parseCanvasProjectExportManifest(value: unknown): ImportableCanv
     const data = value as Record<string, unknown>;
     const validVersion = data.version === 3 || (data.version === 4 && data.kind === "canvas-project");
     if (data.app !== "infinite-canvas" || !validVersion || !Array.isArray(data.projects)) throw new CanvasExportError("invalid_manifest", "不支持的画布导入清单");
+    const strictV4 = data.version === 4;
     const paths = new Set<string>(["projects.json"]);
     const storageKeys = new Map<string, { path: string; mimeType: string }>();
     for (const item of data.projects) {
@@ -273,11 +274,11 @@ export function parseCanvasProjectExportManifest(value: unknown): ImportableCanv
             if (!declaration || typeof declaration.storageKey !== "string" || typeof declaration.path !== "string" || typeof declaration.mimeType !== "string") throw new CanvasExportError("invalid_manifest", "画布导入清单缺少文件声明");
             if (!isStorageKey(declaration.storageKey) || !isSafeArchivePath(declaration.path)) throw new CanvasExportError("invalid_manifest", "画布导入清单包含不安全的文件声明");
             const normalizedPath = declaration.path.toLowerCase();
-            const mime = resolveMime(declaration.mimeType, declaration.storageKey);
+            const mime = strictV4 ? resolveMime(declaration.mimeType, declaration.storageKey) : resolveLegacyMime(declaration.mimeType, declaration.storageKey);
             if (!mime.ok) throw new CanvasExportError("invalid_manifest", "画布导入清单包含不支持的媒体类型");
             const previous = storageKeys.get(declaration.storageKey);
             if (previous) {
-                if (previous.path !== declaration.path || previous.mimeType !== mime.mimeType) throw new CanvasExportError("invalid_manifest", "画布导入清单包含冲突的存储声明");
+                if (strictV4 && (previous.path !== declaration.path || previous.mimeType !== mime.mimeType)) throw new CanvasExportError("invalid_manifest", "画布导入清单包含冲突的存储声明");
                 continue;
             }
             if (paths.has(normalizedPath)) throw new CanvasExportError("invalid_manifest", "画布导入清单包含重复文件路径");
@@ -329,6 +330,11 @@ function isImplicitStorageReferenceField(key?: string) {
     if (!key) return false;
     const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[- ]/g, "_").toLowerCase();
     return normalized === "references" || normalized === "url" || normalized === "data_url" || normalized === "content";
+}
+function resolveLegacyMime(mimeType: string, storageKey: string): { ok: true; mimeType: string; extension: string } | { ok: false } {
+    const normalized = mimeType.toLowerCase().trim();
+    if (!normalized || /[\r\n\x00]/.test(normalized) || normalized.length > 127 || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(normalized)) return { ok: false };
+    return { ok: true, mimeType: normalized, extension: MIME_EXTENSIONS[normalized] || (storageKey.startsWith("image:") ? "png" : "bin") };
 }
 function resolveMime(mimeType: string, storageKey: string, nodeType?: string): { ok: true; mimeType: string; extension: string } | { ok: false; code: "unknown_mime_type" | "mime_type_mismatch" } {
     const normalized = mimeType.toLowerCase().trim();
