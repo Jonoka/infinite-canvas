@@ -37,7 +37,8 @@ export default function AssetsPage() {
     const imageInputRef = useRef<HTMLInputElement>(null);
     const assetInputRef = useRef<HTMLInputElement>(null);
     const assets = useAssetStore((state) => state.assets);
-    const hydrated = useAssetStore((state) => state.hydrated);
+    const writeReady = useAssetStore((state) => state.writeReady);
+    const hydrationError = useAssetStore((state) => state.hydrationError);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
@@ -77,7 +78,7 @@ export default function AssetsPage() {
     }, [filteredAssets.length, pageSize]);
 
     const openCreate = () => {
-        if (!hydrated) return;
+        if (!writeReady) return;
         setEditingAsset(null);
         setImageDraft(null);
         setFormKind("text");
@@ -102,7 +103,7 @@ export default function AssetsPage() {
     };
 
     const saveAsset = async () => {
-        if (!hydrated) return message.warning("资产仍在加载，请稍候");
+        if (!writeReady) return message.error(hydrationError ? "资产加载失败，当前禁止写入" : "资产仍在加载，请稍候");
         const values = await form.validateFields();
         const base = {
             title: values.title.trim(),
@@ -136,7 +137,7 @@ export default function AssetsPage() {
     };
 
     const readImageFile = async (file?: File) => {
-        if (!file || !hydrated || !file.type.startsWith("image/")) return;
+        if (!file || !writeReady || !file.type.startsWith("image/")) return;
         const image = await uploadImage(file);
         const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
         setImageDraft(draft);
@@ -163,7 +164,7 @@ export default function AssetsPage() {
     };
 
     const importAssetZip = async (file?: File) => {
-        if (!file || !hydrated) return;
+        if (!file || !writeReady) return;
         try {
             const importedAssets = await readAssetPackage(file);
             for (const asset of importedAssets) {
@@ -250,7 +251,7 @@ export default function AssetsPage() {
                                 </button>
                                 <button
                                     type="button"
-                                    disabled={!hydrated}
+                                    disabled={!writeReady}
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={() => assetInputRef.current?.click()}
                                 >
@@ -258,7 +259,7 @@ export default function AssetsPage() {
                                 </button>
                                 <button
                                     type="button"
-                                    disabled={!hydrated}
+                                    disabled={!writeReady}
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
                                     onClick={openCreate}
                                 >
@@ -312,7 +313,7 @@ export default function AssetsPage() {
                         <Form.Item name="coverUrl" label="封面 URL">
                             <Space.Compact className="w-full">
                                 <Input placeholder="可粘贴图片 URL，也可以上传本地封面" />
-                                <Button disabled={!hydrated} icon={<Upload className="size-3.5" />} onClick={() => coverInputRef.current?.click()}>
+                                <Button disabled={!writeReady} icon={<Upload className="size-3.5" />} onClick={() => coverInputRef.current?.click()}>
                                     上传
                                 </Button>
                             </Space.Compact>
@@ -404,7 +405,7 @@ export default function AssetsPage() {
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
 
-            <Modal title="删除资产" open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={() => void confirmDelete()} okText="删除" okButtonProps={{ danger: true, disabled: !hydrated }} cancelText="取消">
+            <Modal title="删除资产" open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={() => void confirmDelete()} okText="删除" okButtonProps={{ danger: true, disabled: !writeReady }} cancelText="取消">
                 确定删除「{deletingAsset?.title}」吗？删除后会从我的资产中移除。
             </Modal>
         </div>

@@ -38,7 +38,7 @@ type SyncDomainOptions<T> = {
     localData: () => Promise<T>;
     emptyData: T;
     mergeData: (local: T, remote: T) => T;
-    applyData?: (data: T) => Promise<void>;
+    applyData?: (data: T) => Promise<T | void>;
 };
 
 type SyncDomainResult<T> = {
@@ -99,7 +99,10 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             emptyData: { assets: [] },
             localData: async () => ({ assets: useAssetStore.getState().assets }),
             mergeData: (local, remote) => ({ assets: mergeById(local.assets, remote.assets, "updatedAt") }),
-            applyData: async (data) => useAssetStore.getState().replaceAssets(await Promise.all(data.assets.map(hydrateAsset))),
+            applyData: async (data) => {
+                const remote = await Promise.all(data.assets.map(hydrateAsset));
+                return { assets: await useAssetStore.getState().mergeAssets(remote, (latest, incoming) => mergeById(latest, incoming, "updatedAt")) };
+            },
         }),
         syncDomain<LogDomainData>(config, onProgress, {
             key: "image-workbench",
@@ -141,13 +144,13 @@ async function syncDomain<T>(config: WebdavSyncConfig, onProgress: AppSyncProgre
         const remoteManifest = await readDomainManifest(config, options.key, options.emptyData);
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: "读取本地数据", status: "active" });
         const localData = await options.localData();
-        const mergedData = remoteManifest ? options.mergeData(localData, remoteManifest.data) : localData;
+        let mergedData = remoteManifest ? options.mergeData(localData, remoteManifest.data) : localData;
 
         if (remoteManifest) {
             emitProgress(onProgress, { domain: options.key, label: options.label, stage: "下载缺失媒体", status: "active" });
             await downloadMissingFiles(config, options.key, mergedData, remoteManifest.files, onProgress);
             emitProgress(onProgress, { domain: options.key, label: options.label, stage: "写入本地合并结果", status: "active" });
-            await options.applyData?.(mergedData);
+            mergedData = await options.applyData?.(mergedData) || mergedData;
         }
 
         emitProgress(onProgress, { domain: options.key, label: options.label, stage: "上传新增媒体", status: "active" });

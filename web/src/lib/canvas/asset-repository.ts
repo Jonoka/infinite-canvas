@@ -8,7 +8,7 @@ export function enqueueAssetMutation<T>(operation: () => Promise<T>): Promise<T>
 }
 
 export type AssetRepositoryDependencies<TAsset> = {
-    isHydrated: () => boolean;
+    isWriteReady: () => boolean;
     getAssets: () => TAsset[];
     persistAssets: (assets: TAsset[]) => Promise<void>;
     publishAssets: (assets: TAsset[]) => void;
@@ -19,10 +19,34 @@ export function mutateAssetRepository<TAsset, TResult>(
     mutation: (latest: TAsset[]) => { assets: TAsset[]; result: TResult },
 ) {
     return enqueueAssetMutation(async () => {
-        if (!dependencies.isHydrated()) throw new Error("asset_repository_not_hydrated");
+        if (!dependencies.isWriteReady()) throw new Error("asset_repository_not_write_ready");
         const next = mutation(dependencies.getAssets());
         await dependencies.persistAssets(next.assets);
         dependencies.publishAssets(next.assets);
         return next.result;
+    });
+}
+
+export function mergeAssetRepository<TAsset>(
+    dependencies: AssetRepositoryDependencies<TAsset>,
+    remote: TAsset[],
+    merge: (latest: TAsset[], remote: TAsset[]) => TAsset[],
+) {
+    return mutateAssetRepository(dependencies, (latest) => {
+        const assets = merge(latest, remote);
+        return { assets, result: assets };
+    });
+}
+
+export function hydrateAssetRepository<TAsset>(dependencies: {
+    loadAssets: () => Promise<{ assets: TAsset[]; requiresPersist: boolean }>;
+    persistAssets: (assets: TAsset[]) => Promise<void>;
+    publishAssets: (assets: TAsset[]) => void;
+}) {
+    return enqueueAssetMutation(async () => {
+        const loaded = await dependencies.loadAssets();
+        if (loaded.requiresPersist) await dependencies.persistAssets(loaded.assets);
+        dependencies.publishAssets(loaded.assets);
+        return loaded.assets;
     });
 }

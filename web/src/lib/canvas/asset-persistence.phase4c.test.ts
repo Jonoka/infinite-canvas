@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { mutateAssetRepository } from "./asset-repository";
+import { hydrateAssetRepository, mergeAssetRepository, mutateAssetRepository } from "./asset-repository";
 import { commitAssetUpload } from "./asset-store-persistence";
 import type { AssetUploadCommit } from "./asset-upload";
 import { createBlobUrlCache } from "../../services/blob-url-cache";
@@ -14,16 +14,14 @@ const ownership = { signal: new AbortController().signal, isCurrent: () => true 
 function commitHarness() {
     let assets: Array<{ id: string }> = [{ id: "old" }];
     let durable = assets;
-    const deleted: string[] = [];
     const published: string[][] = [];
     return {
-        get assets() { return assets; }, get durable() { return durable; }, deleted, published,
+        get assets() { return assets; }, get durable() { return durable; }, published,
         setDurable(next: Array<{ id: string }>) { durable = next; },
         dependencies: {
             getAssets: () => assets,
             readDurableAssets: async () => durable,
             writeBlob: async () => "blob:new",
-            deleteBlobs: async (files: AssetUploadCommit["files"]) => { deleted.push(...files.map((file) => file.storageKey)); },
             persistAssets: async (next: Array<{ id: string }>) => { durable = next; },
             publishAssets: (next: Array<{ id: string }>) => { assets = next; published.push(next.map((asset) => asset.id)); },
             materialize: () => [{ id: "new" }],
@@ -36,7 +34,7 @@ describe("Phase 4C durable asset repository", () => {
         let assets = [{ id: "old" }];
         let release!: () => void;
         const blocked = new Promise<void>((resolve) => { release = resolve; });
-        const dependencies = { isHydrated: () => true, getAssets: () => assets, persistAssets: async (next: typeof assets) => { if (next[0].id === "first") await blocked; }, publishAssets: (next: typeof assets) => { assets = next; } };
+        const dependencies = { isWriteReady: () => true, getAssets: () => assets, persistAssets: async (next: typeof assets) => { if (next[0].id === "first") await blocked; }, publishAssets: (next: typeof assets) => { assets = next; } };
         const first = mutateAssetRepository(dependencies, (latest) => ({ assets: [{ id: "first" }, ...latest], result: undefined }));
         const second = mutateAssetRepository(dependencies, (latest) => ({ assets: [{ id: "second" }, ...latest], result: undefined }));
         release();
@@ -46,16 +44,15 @@ describe("Phase 4C durable asset repository", () => {
 
     test("upload preserves a mutation queued before it", async () => {
         const harness = commitHarness();
-        await mutateAssetRepository({ isHydrated: () => true, getAssets: harness.dependencies.getAssets, persistAssets: harness.dependencies.persistAssets, publishAssets: harness.dependencies.publishAssets }, (latest) => ({ assets: [{ id: "concurrent" }, ...latest], result: undefined }));
+        await mutateAssetRepository({ isWriteReady: () => true, getAssets: harness.dependencies.getAssets, persistAssets: harness.dependencies.persistAssets, publishAssets: harness.dependencies.publishAssets }, (latest) => ({ assets: [{ id: "concurrent" }, ...latest], result: undefined }));
         await commitAssetUpload(upload, ownership, harness.dependencies);
         expect(harness.assets.map((asset) => asset.id)).toEqual(["new", "concurrent", "old"]);
     });
 
-    test("deletes staged blobs when initial metadata persist fails", async () => {
+    test("retains staged blobs for deferred GC when initial metadata persist fails", async () => {
         const harness = commitHarness();
         harness.dependencies.persistAssets = async () => { throw new Error("metadata failed"); };
         await expect(commitAssetUpload(upload, ownership, harness.dependencies)).rejects.toThrow("metadata failed");
-        expect(harness.deleted).toEqual(["image:new"]);
         expect(harness.published).toEqual([]);
     });
 
@@ -75,8 +72,29 @@ describe("Phase 4C durable asset repository", () => {
         };
         const error = await commitAssetUpload(upload, { ...ownership, isCurrent: () => current }, harness.dependencies).catch((value) => value);
         expect(error).toMatchObject({ rollback: "failed_blobs_retained" });
-        expect(harness.deleted).toEqual([]);
         expect(harness.assets.map((asset) => asset.id)).toContain("new");
+    });
+
+    test("rejects mutation while hydration is not write-ready", async () => {
+        const dependencies = { isWriteReady: () => false, getAssets: () => [{ id: "old" }], persistAssets: async () => undefined, publishAssets: () => undefined };
+        await expect(mutateAssetRepository(dependencies, (latest) => ({ assets: latest, result: undefined }))).rejects.toThrow("asset_repository_not_write_ready");
+    });
+
+    test("persists a legacy migration before publishing and never publishes on persist failure", async () => {
+        const events: string[] = [];
+        await hydrateAssetRepository({ loadAssets: async () => ({ assets: [{ id: "migrated" }], requiresPersist: true }), persistAssets: async () => { events.push("persist"); }, publishAssets: () => { events.push("publish"); } });
+        expect(events).toEqual(["persist", "publish"]);
+        await expect(hydrateAssetRepository({ loadAssets: async () => ({ assets: [{ id: "bad" }], requiresPersist: true }), persistAssets: async () => { throw new Error("quota"); }, publishAssets: () => { events.push("bad-publish"); } })).rejects.toThrow("quota");
+        expect(events).not.toContain("bad-publish");
+    });
+
+    test("merges remote with latest state inside the lock and preserves concurrent add", async () => {
+        let assets = [{ id: "old" }];
+        const dependencies = { isWriteReady: () => true, getAssets: () => assets, persistAssets: async () => undefined, publishAssets: (next: typeof assets) => { assets = next; } };
+        const add = mutateAssetRepository(dependencies, (latest) => ({ assets: [{ id: "concurrent" }, ...latest], result: undefined }));
+        const sync = mergeAssetRepository(dependencies, [{ id: "remote" }], (latest, remote) => [...remote, ...latest]);
+        await Promise.all([add, sync]);
+        expect(assets.map((asset) => asset.id)).toEqual(["remote", "concurrent", "old"]);
     });
 });
 

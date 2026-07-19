@@ -6,6 +6,11 @@ const assetStore = await Bun.file(new URL("../../stores/use-asset-store.ts", imp
 const imageStorage = await Bun.file(new URL("../../services/image-storage.ts", import.meta.url)).text();
 const mediaStorage = await Bun.file(new URL("../../services/file-storage.ts", import.meta.url)).text();
 const blobCache = await Bun.file(new URL("../../services/blob-url-cache.ts", import.meta.url)).text();
+const promptsPage = await Bun.file(new URL("../../pages/prompts/index.tsx", import.meta.url)).text();
+const imagePage = await Bun.file(new URL("../../pages/image/index.tsx", import.meta.url)).text();
+const videoPage = await Bun.file(new URL("../../pages/video/index.tsx", import.meta.url)).text();
+const canvasProject = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
+const appSync = await Bun.file(new URL("../../services/app-sync.ts", import.meta.url)).text();
 
 describe("Phase 4C asset sidebar wiring", () => {
     test("runs Phase 4C contracts in protocol CI", () => {
@@ -50,6 +55,36 @@ describe("Phase 4C asset sidebar wiring", () => {
         expect(assetStore).toContain("mutateAssetRepository(repository");
         expect(assetStore).not.toContain("removeAssetMetadata");
         expect(assetStore).toContain("cleanupImages: () => undefined");
+        expect(imagePage).not.toContain("deleteStoredImages");
+        expect(videoPage).not.toContain("deleteStoredMedia");
+    });
+
+    test("awaits and catches durable addAsset at all four production callers", () => {
+        for (const source of [promptsPage, imagePage, videoPage, canvasProject]) {
+            expect(source).toContain("await addAsset(");
+            expect(source).toMatch(/catch\s*(?:\([^)]*\))?\s*\{/);
+        }
+    });
+
+    test("fails hydration closed and gates asset UI on writeReady", () => {
+        expect(assetStore).toContain("writeReady: false");
+        expect(assetStore).toContain("hydrationError:");
+        expect(assetStore).toContain("asset_repository_not_write_ready");
+        expect(sidePanel).toContain("disabled={uploading || !writeReady}");
+        expect(assetStore).not.toContain("setState({ hydrated: true });");
+    });
+
+    test("applies app-sync asset merge through the repository lock", () => {
+        expect(appSync).toContain("getState().mergeAssets(remote");
+        expect(appSync).not.toContain("getState().replaceAssets(await Promise.all(data.assets");
+        expect(assetStore).toContain("mergeAssetRepository(repository");
+    });
+
+    test("reports partial upload distinctly with all outcome counts", () => {
+        expect(sidePanel).toContain('result.status === "partial"');
+        expect(sidePanel).toContain("message.warning(summary)");
+        expect(sidePanel).toContain("message.error(summary)");
+        expect(sidePanel).toContain("成功 ${result.committedCount} 个，拒绝 ${result.rejectedCount} 个，失败 ${result.failedCount} 个");
     });
 
     test("routes image and media URLs through the keyed generation cache", () => {

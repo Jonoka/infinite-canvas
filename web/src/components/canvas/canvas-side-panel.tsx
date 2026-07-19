@@ -284,7 +284,7 @@ function buildInsertPayload(asset: Asset): InsertAssetPayload {
 function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
     const { message } = App.useApp();
     const assets = useAssetStore((state) => state.assets);
-    const hydrated = useAssetStore((state) => state.hydrated);
+    const writeReady = useAssetStore((state) => state.writeReady);
     const commitUploadedAssets = useAssetStore((state) => state.commitUploadedAssets);
     const [keyword, setKeyword] = useState("");
     const [tagFilter, setTagFilter] = useState<string>("all");
@@ -325,8 +325,10 @@ function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetP
                 createId: () => crypto.randomUUID(),
             }, { signal: controller.signal, isCurrent: () => generation === uploadGenerationRef.current });
             if (generation !== uploadGenerationRef.current) return;
-            if (result.committedCount) message.success(`已添加 ${result.committedCount}/${files.length} 个资产`);
-            else message.warning(`未添加资产：${result.rejectedCount} 个被拒绝，${result.failedCount} 个失败`);
+            const summary = `成功 ${result.committedCount} 个，拒绝 ${result.rejectedCount} 个，失败 ${result.failedCount} 个`;
+            if (result.status === "success") message.success(summary);
+            else if (result.status === "partial") message.warning(summary);
+            else message.error(summary);
         } catch (error) {
             console.error(error);
             if (generation === uploadGenerationRef.current && !controller.signal.aborted) message.error("添加失败，请重试");
@@ -345,7 +347,7 @@ function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetP
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder="搜索资产" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
                 <button
                     type="button"
-                    disabled={uploading || !hydrated}
+                    disabled={uploading || !writeReady}
                     onClick={() => fileInputRef.current?.click()}
                     className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/10"
                     style={{ color: theme.node.text }}
@@ -383,7 +385,7 @@ function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetP
                                     {isCollapsed ? null : (
                                         <div className="grid grid-cols-2 gap-2 px-1 pb-2 pt-1">
                                             {group.items.map((asset) => (
-                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => useAssetStore.getState().removeAsset(asset.id).then(() => message.success("资产已移除")).catch(() => message.error("移除失败，请重试"))} removalDisabled={!hydrated} />
+                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => useAssetStore.getState().removeAsset(asset.id).then(() => message.success("资产已移除")).catch(() => message.error("移除失败，请重试"))} removalDisabled={!writeReady} />
                                             ))}
                                         </div>
                                     )}
