@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 const packageJson = await Bun.file(new URL("../../../package.json", import.meta.url)).text();
 const panel = await Bun.file(new URL("../../components/canvas/canvas-side-panel.tsx", import.meta.url)).text();
+const project = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
 const store = await Bun.file(new URL("../../stores/use-canvas-side-panel-store.ts", import.meta.url)).text();
 
 describe("Phase 4D Canvas side-panel resize production wiring", () => {
@@ -42,6 +43,12 @@ describe("Phase 4D Canvas side-panel resize production wiring", () => {
         expect(panel).toContain('type: "external-width", width');
         expect(panel).toContain('if (!panelOpen || !panelMounted) dispatchResize({ type: "unmount" })');
         expect(panel).toContain("if (event.button !== 0 || !event.isPrimary) return;\n        event.preventDefault();");
+    });
+
+    test("locks the Canvas flex layout to the same physical-left model as the separator", () => {
+        expect(project).toContain('<main dir="ltr" className="flex h-full min-h-0 overflow-hidden"');
+        expect(panel).toContain('const physicalSide = "left" as const');
+        expect(panel).toContain("right-0");
     });
 
     test("centralizes fail-soft storage and clamps every store write", () => {
