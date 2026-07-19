@@ -150,13 +150,16 @@ describe("Phase 4B current-canvas export contract", () => {
         const dataContent = mediaNode("data-content", CanvasNodeType.Image, "data", "", "data:image/png;base64,content-payload-secret");
         const blobContent = mediaNode("blob-content", CanvasNodeType.Video, "blob", "", "blob:content-transient-secret");
         const nestedPlugin = mediaNode("nested-plugin", "example:media", "plugin", "");
-        nestedPlugin.metadata = { ...nestedPlugin.metadata, nested: { dataUrl: "data:image/png;base64,plugin-payload-secret", url: "blob:plugin-transient-secret" } } as typeof nestedPlugin.metadata;
+        nestedPlugin.metadata = { ...nestedPlugin.metadata, content: "data:plugin-content-secret", nested: { data: "data:plugin-data-secret", blob: "blob:plugin-blob-secret", dataUrl: "data:image/png;base64,plugin-payload-secret", url: "blob:plugin-transient-secret" } } as typeof nestedPlugin.metadata;
         const locationPlan = await buildCanvasProjectExport({ ...baseProject, nodes: [dataContent, blobContent, nestedPlugin] }, readers({}));
         const locationSerialized = JSON.stringify(locationPlan.manifest);
         expect(locationSerialized).not.toContain("content-payload-secret");
         expect(locationSerialized).not.toContain("content-transient-secret");
         expect(locationSerialized).not.toContain("plugin-payload-secret");
         expect(locationSerialized).not.toContain("plugin-transient-secret");
+        expect(locationSerialized).not.toContain("plugin-content-secret");
+        expect(locationSerialized).not.toContain("plugin-data-secret");
+        expect(locationSerialized).not.toContain("plugin-blob-secret");
     });
 
     test("sanitizes traversal and resolves colliding ZIP paths globally", async () => {

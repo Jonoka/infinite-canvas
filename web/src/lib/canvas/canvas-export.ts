@@ -210,6 +210,7 @@ function redactProject(project: CanvasProject, issues: CanvasExportIssue[]): Can
 }
 
 function redactValue(value: unknown, nodeId: string | undefined, issues: CanvasExportIssue[], mediaContext: boolean): unknown {
+    if (typeof value === "string" && /^(blob:|data:)/i.test(value)) return "[REDACTED]";
     if (Array.isArray(value)) return value.map((item) => redactValue(item, nodeId, issues, mediaContext));
     if (!value || typeof value !== "object") return value;
     const record = value as Record<string, unknown>;
