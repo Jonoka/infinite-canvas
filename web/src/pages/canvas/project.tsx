@@ -2975,7 +2975,7 @@ function InfiniteCanvasPage() {
     if (!projectLoaded) return <CanvasRefreshShell />;
 
     return (
-        <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
+        <main dir="ltr" className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
             <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onInsertAsset={handleAssetInsert} />
             <section className="relative min-w-0 flex-1 overflow-hidden">
                 <CanvasTopBar
