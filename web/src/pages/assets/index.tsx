@@ -104,8 +104,9 @@ export default function AssetsPage() {
 
     const saveAsset = async () => {
         if (!writeReady) return message.error(hydrationError ? "资产加载失败，当前禁止写入" : "资产仍在加载，请稍候");
-        const values = await form.validateFields();
-        const base = {
+        try {
+            const values = await form.validateFields();
+            const base = {
             title: values.title.trim(),
             coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),
             tags: values.tags || [],
@@ -126,8 +127,12 @@ export default function AssetsPage() {
             await (editingAsset ? updateAsset(editingAsset.id, asset) : addAsset(asset));
         }
 
-        message.success(editingAsset ? "资产已更新" : "资产已保存");
-        setIsAssetOpen(false);
+            message.success(editingAsset ? "资产已更新" : "资产已保存");
+            setIsAssetOpen(false);
+        } catch (error) {
+            if ((error as { errorFields?: unknown }).errorFields) return;
+            message.error("保存资产失败，请重试");
+        }
     };
 
     const readCoverFile = async (file?: File) => {

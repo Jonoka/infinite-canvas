@@ -11,6 +11,8 @@ const imagePage = await Bun.file(new URL("../../pages/image/index.tsx", import.m
 const videoPage = await Bun.file(new URL("../../pages/video/index.tsx", import.meta.url)).text();
 const canvasProject = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
 const appSync = await Bun.file(new URL("../../services/app-sync.ts", import.meta.url)).text();
+const assetsPage = await Bun.file(new URL("../../pages/assets/index.tsx", import.meta.url)).text();
+const agentTools = await Bun.file(new URL("../agent/agent-site-tools.ts", import.meta.url)).text();
 
 describe("Phase 4C asset sidebar wiring", () => {
     test("runs Phase 4C contracts in protocol CI", () => {
@@ -72,6 +74,19 @@ describe("Phase 4C asset sidebar wiring", () => {
         expect(assetStore).toContain("asset_repository_not_write_ready");
         expect(sidePanel).toContain("disabled={uploading || !writeReady}");
         expect(assetStore).not.toContain("setState({ hydrated: true });");
+    });
+
+    test("fails app-sync and Agent reads closed when asset hydration is not write-ready", () => {
+        expect(appSync).toContain("if (!assetState.writeReady) throw new Error");
+        expect(appSync).toContain("assetState.hydrationError");
+        expect(agentTools).toContain("if (!writeReady) throw new Error");
+        expect(agentTools).toContain("hydrationError");
+    });
+
+    test("handles AssetsPage durable save failures instead of dropping the promise", () => {
+        expect(assetsPage).toContain("await (editingAsset ? updateAsset");
+        expect(assetsPage).toContain('message.error("保存资产失败，请重试")');
+        expect(assetsPage).toMatch(/const saveAsset = async \(\) => \{[\s\S]*try \{[\s\S]*catch \(error\)/);
     });
 
     test("applies app-sync asset merge through the repository lock", () => {

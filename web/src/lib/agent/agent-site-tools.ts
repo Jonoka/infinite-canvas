@@ -193,8 +193,9 @@ async function searchPrompts(input: SiteToolInput) {
 }
 
 function listAssets(input: SiteToolInput) {
-    const { assets, hydrated } = useAssetStore.getState();
+    const { assets, hydrated, writeReady, hydrationError } = useAssetStore.getState();
     if (!hydrated) throw new Error("资产还在加载中，请稍后重试");
+    if (!writeReady) throw new Error(hydrationError ? `资产加载失败：${hydrationError}` : "资产尚未准备好，请稍后重试");
     const kind = input.kind === "text" || input.kind === "image" || input.kind === "video" ? input.kind : "all";
     const keyword = String(input.keyword || "").trim().toLowerCase();
     const filtered = assets.filter((asset) => {
