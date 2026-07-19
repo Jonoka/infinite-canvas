@@ -34,8 +34,10 @@ describe("Phase 4A Canvas node performance wiring", () => {
         const panelEnd = project.indexOf("const renderNodeContentPanel = useCallback(", panelStart);
         const panel = project.slice(panelStart, panelEnd);
 
+        const canvasNode = await Bun.file(new URL("../../components/canvas/canvas-node.tsx", import.meta.url)).text();
         expect(panel).toContain("panelMentionReferencesByNodeId.get(panelNode.id)");
         expect(invocation).toContain("pluginGraphRevision={isBuiltinType(node.type) ? undefined : pluginGraphRevision}");
+        expect(canvasNode).toContain("[pluginHost, pluginGraphRevision, data, theme, scale, isSelected]");
     });
 
     test("keeps Plugin refresh props and Phase 2B recovery metadata intact", async () => {

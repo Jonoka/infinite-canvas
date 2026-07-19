@@ -92,6 +92,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     showImageInfo,
     mentionReferences = [],
     pluginHost,
+    pluginGraphRevision,
     renderPanel,
     renderNodeContent,
     batchCount = 0,
@@ -120,7 +121,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [hovered, setHovered] = useState(false);
     const definition = getNodeDefinition(data.type);
-    const pluginContext = useMemo<CanvasNodeContext | null>(() => (pluginHost ? buildNodeContext(pluginHost, data, theme, scale, isSelected) : null), [pluginHost, data, theme, scale, isSelected]);
+    const pluginContext = useMemo<CanvasNodeContext | null>(() => (pluginHost ? buildNodeContext(pluginHost, data, theme, scale, isSelected) : null), [pluginHost, pluginGraphRevision, data, theme, scale, isSelected]);
     const [isEditingContent, setIsEditingContent] = useState(false);
     const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [titleDraft, setTitleDraft] = useState(data.title || "");
