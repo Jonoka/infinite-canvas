@@ -61,8 +61,10 @@ export function sniffMime(bytes: Uint8Array): string | undefined {
     if (ascii(bytes, 0, "RIFF") && ascii(bytes, 8, "WEBP")) return "image/webp";
     if (starts(bytes, [0x1a, 0x45, 0xdf, 0xa3])) return "video/webm";
     if (bytes.length < 16 || !ascii(bytes, 4, "ftyp")) return undefined;
-    const boxSize = Math.min(readU32(bytes, 0), bytes.length);
-    if (boxSize < 16) return undefined;
+    const declaredSize = readU32(bytes, 0);
+    // Extended/EOF-sized boxes and malformed compatible-brand alignment fail closed.
+    if (declaredSize === 0 || declaredSize === 1 || declaredSize > bytes.length || declaredSize < 16 || (declaredSize - 16) % 4) return undefined;
+    const boxSize = declaredSize;
     const brands = [String.fromCharCode(...bytes.slice(8, 12))];
     for (let offset = 16; offset + 4 <= boxSize; offset += 4) brands.push(String.fromCharCode(...bytes.slice(offset, offset + 4)));
     if (brands.includes("qt  ")) return "video/quicktime";

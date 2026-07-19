@@ -5,7 +5,7 @@ const sidePanel = await Bun.file(new URL("../../components/canvas/canvas-side-pa
 const assetStore = await Bun.file(new URL("../../stores/use-asset-store.ts", import.meta.url)).text();
 const imageStorage = await Bun.file(new URL("../../services/image-storage.ts", import.meta.url)).text();
 const mediaStorage = await Bun.file(new URL("../../services/file-storage.ts", import.meta.url)).text();
-const blobLifecycle = await Bun.file(new URL("../../services/blob-url-lifecycle.ts", import.meta.url)).text();
+const blobCache = await Bun.file(new URL("../../services/blob-url-cache.ts", import.meta.url)).text();
 
 describe("Phase 4C asset sidebar wiring", () => {
     test("runs Phase 4C contracts in protocol CI", () => {
@@ -45,16 +45,18 @@ describe("Phase 4C asset sidebar wiring", () => {
         expect(sidePanel).toContain("<Popconfirm");
     });
 
-    test("uses reference-aware removal rather than deleting shared media immediately", () => {
-        expect(sidePanel).toContain("confirmAssetRemoval");
-        expect(sidePanel).not.toContain("onRemove={() => (removeAsset(asset.id)");
-        expect(assetStore).toContain("removeAssetMetadata");
+    test("routes removal through the async repository and defers physical GC", () => {
+        expect(sidePanel).toContain("useAssetStore.getState().removeAsset(asset.id)");
+        expect(assetStore).toContain("mutateAssetRepository(repository");
+        expect(assetStore).not.toContain("removeAssetMetadata");
+        expect(assetStore).toContain("cleanupImages: () => undefined");
     });
 
-    test("routes image and media cleanup through revoke-aware deletion", () => {
-        expect(imageStorage).toContain("deleteStoredBlobUrl");
-        expect(mediaStorage).toContain("deleteStoredBlobUrl");
-        expect(blobLifecycle).toContain("revokeObjectURL");
+    test("routes image and media URLs through the keyed generation cache", () => {
+        expect(imageStorage).toContain("createBlobUrlCache");
+        expect(mediaStorage).toContain("createBlobUrlCache");
+        expect(blobCache).toContain("generations");
+        expect(blobCache).toContain("queues");
         expect(mediaStorage).not.toMatch(/cleanupUnusedMedia[\s\S]*unused\.map\(\(key\) => store\.removeItem\(key\)\)/);
         expect(mediaStorage).toContain("deleteStoredMedia(unused)");
     });

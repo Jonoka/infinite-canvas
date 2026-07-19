@@ -25,32 +25,3 @@ export function planAssetRemoval(assetId: string, assets: readonly unknown[], pr
         referencedByOtherAsset,
     };
 }
-
-let removalQueue: Promise<void> = Promise.resolve();
-function enqueueRemoval<T>(operation: () => Promise<T>) {
-    const result = removalQueue.then(operation, operation);
-    removalQueue = result.then(() => undefined, () => undefined);
-    return result;
-}
-
-export async function confirmAssetRemoval(input: {
-    assetId: string;
-    getAssets: () => readonly unknown[];
-    getProjects: () => readonly unknown[];
-    removeAssetMetadata: (assetId: string) => void | Promise<void>;
-    deleteStoredImages: (keys: Iterable<string>) => Promise<void>;
-    deleteStoredMedia: (keys: Iterable<string>) => Promise<void>;
-}) {
-    const plan = planAssetRemoval(input.assetId, input.getAssets(), input.getProjects());
-    await input.removeAssetMetadata(input.assetId);
-    if (!plan.storageKey) return plan;
-    await enqueueRemoval(async () => {
-        // GC deliberately uses the latest snapshots, after metadata removal and immediately before Blob deletion.
-        const stillReferenced = input.getAssets().some((asset) => storageKeyOf(asset) === plan.storageKey)
-            || input.getProjects().some((project) => containsStorageKey(project, plan.storageKey!));
-        if (stillReferenced) return;
-        if (plan.kind === "image") await input.deleteStoredImages([plan.storageKey!]);
-        else if (plan.kind === "video") await input.deleteStoredMedia([plan.storageKey!]);
-    });
-    return plan;
-}

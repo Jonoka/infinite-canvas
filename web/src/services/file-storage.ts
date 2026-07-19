@@ -1,31 +1,29 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
-import { deleteStoredBlobUrl, replaceStoredBlobUrl } from "@/services/blob-url-lifecycle";
+import { createBlobUrlCache } from "@/services/blob-url-cache";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number; urls?: string[] };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
-const objectUrls = new Map<string, string>();
+const blobUrls = createBlobUrlCache<Blob>({
+    read: (key) => store.getItem<Blob>(key),
+    write: (key, blob) => store.setItem(key, blob),
+    remove: (key) => store.removeItem(key),
+    createObjectURL: (blob) => URL.createObjectURL(blob),
+    revokeObjectURL: (url) => URL.revokeObjectURL(url),
+});
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
     const storageKey = `${prefix}:${nanoid()}`;
-    await store.setItem(storageKey, blob);
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
+    const url = await blobUrls.set(storageKey, blob);
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : blob.type.startsWith("audio/") ? await readAudioMeta(url) : {};
     return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
 }
 
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
-    const cached = objectUrls.get(storageKey);
-    if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    return url;
+    return blobUrls.resolve(storageKey, fallback);
 }
 
 export async function getMediaBlob(storageKey: string) {
@@ -33,18 +31,12 @@ export async function getMediaBlob(storageKey: string) {
 }
 
 export async function setMediaBlob(storageKey: string, blob: Blob) {
-    const previous = objectUrls.get(storageKey);
-    const url = await replaceStoredBlobUrl({ storageKey, blob, currentUrl: previous, write: (key, value) => store.setItem(key, value), lifecycle: URL });
-    objectUrls.set(storageKey, url);
-    return url;
+    return blobUrls.set(storageKey, blob);
 }
 
 export async function deleteStoredMedia(keys: Iterable<string>) {
     await Promise.all(
-        Array.from(new Set(keys)).map(async (key) => {
-            await deleteStoredBlobUrl({ storageKey: key, currentUrl: objectUrls.get(key), remove: (storageKey) => store.removeItem(storageKey), revokeObjectURL: URL.revokeObjectURL.bind(URL) });
-            objectUrls.delete(key);
-        }),
+        Array.from(new Set(keys)).map((key) => blobUrls.delete(key)),
     );
 }
 

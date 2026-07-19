@@ -100,6 +100,18 @@ describe("Phase 4C asset upload planner", () => {
         expect(lied.items[0]).toMatchObject({ status: "rejected", error: { code: "type_signature_mismatch" } });
     });
 
+    test("fails closed for extended, EOF-sized, and unaligned ISO BMFF boxes", () => {
+        const extended = new Uint8Array(ftyp("isom"));
+        extended[3] = 1;
+        const eofSized = new Uint8Array(ftyp("isom"));
+        eofSized[3] = 0;
+        const unaligned = new Uint8Array([...ftyp("isom"), 0]);
+        unaligned[3] = unaligned.length;
+        expect(sniffMime(extended)).toBeUndefined();
+        expect(sniffMime(eofSized)).toBeUndefined();
+        expect(sniffMime(unaligned)).toBeUndefined();
+    });
+
     test("hashes fixed-size chunks and observes abort between chunk reads", async () => {
         const controller = new AbortController();
         const reads: Array<[number, number]> = [];

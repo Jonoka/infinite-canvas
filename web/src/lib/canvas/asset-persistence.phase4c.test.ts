@@ -1,81 +1,107 @@
 import { describe, expect, test } from "bun:test";
 
-import { confirmAssetRemoval, planAssetRemoval } from "./asset-removal";
+import { mutateAssetRepository } from "./asset-repository";
 import { commitAssetUpload } from "./asset-store-persistence";
 import type { AssetUploadCommit } from "./asset-upload";
-import { deleteStoredBlobUrl, replaceStoredBlobUrl } from "../../services/blob-url-lifecycle";
+import { createBlobUrlCache } from "../../services/blob-url-cache";
 
 const upload: AssetUploadCommit = {
     assets: [{ id: "new", kind: "image", title: "new", coverUrl: "", tags: [], createdAt: "now", updatedAt: "now", metadata: { uploadSha256: "hash" }, data: { storageKey: "image:new", width: 1, height: 1, bytes: 1, mimeType: "image/png" } }],
     files: [{ assetId: "new", file: new File([new Uint8Array([1])], "new.png"), storageKey: "image:new", kind: "image" }],
 };
+const ownership = { signal: new AbortController().signal, isCurrent: () => true };
 
 function commitHarness() {
     let assets: Array<{ id: string }> = [{ id: "old" }];
+    let durable = assets;
     const deleted: string[] = [];
     const published: string[][] = [];
     return {
-        get assets() { return assets; }, deleted, published,
+        get assets() { return assets; }, get durable() { return durable; }, deleted, published,
+        setDurable(next: Array<{ id: string }>) { durable = next; },
         dependencies: {
             getAssets: () => assets,
+            readDurableAssets: async () => durable,
             writeBlob: async () => "blob:new",
             deleteBlobs: async (files: AssetUploadCommit["files"]) => { deleted.push(...files.map((file) => file.storageKey)); },
-            persistAssets: async (_next: Array<{ id: string }>) => undefined,
+            persistAssets: async (next: Array<{ id: string }>) => { durable = next; },
             publishAssets: (next: Array<{ id: string }>) => { assets = next; published.push(next.map((asset) => asset.id)); },
             materialize: () => [{ id: "new" }],
         },
     };
 }
 
-describe("Phase 4C durable asset commit", () => {
-    test("rolls back a batch that becomes stale while Blob writing", async () => {
-        const harness = commitHarness();
-        let current = true;
-        harness.dependencies.writeBlob = async () => { current = false; return "blob:new"; };
-        await expect(commitAssetUpload(upload, { signal: new AbortController().signal, isCurrent: () => current }, harness.dependencies)).rejects.toMatchObject({ uploadCode: "stale_batch" });
-        expect(harness.deleted).toEqual(["image:new"]);
-        expect(harness.published).toEqual([]);
-        expect(harness.assets).toEqual([{ id: "old" }]);
+describe("Phase 4C durable asset repository", () => {
+    test("serializes mutations and reads latest state inside the lock", async () => {
+        let assets = [{ id: "old" }];
+        let release!: () => void;
+        const blocked = new Promise<void>((resolve) => { release = resolve; });
+        const dependencies = { isHydrated: () => true, getAssets: () => assets, persistAssets: async (next: typeof assets) => { if (next[0].id === "first") await blocked; }, publishAssets: (next: typeof assets) => { assets = next; } };
+        const first = mutateAssetRepository(dependencies, (latest) => ({ assets: [{ id: "first" }, ...latest], result: undefined }));
+        const second = mutateAssetRepository(dependencies, (latest) => ({ assets: [{ id: "second" }, ...latest], result: undefined }));
+        release();
+        await Promise.all([first, second]);
+        expect(assets.map((asset) => asset.id)).toEqual(["second", "first", "old"]);
     });
 
-    test("awaits metadata durability and rolls Blobs back on persist failure", async () => {
+    test("upload preserves a mutation queued before it", async () => {
+        const harness = commitHarness();
+        await mutateAssetRepository({ isHydrated: () => true, getAssets: harness.dependencies.getAssets, persistAssets: harness.dependencies.persistAssets, publishAssets: harness.dependencies.publishAssets }, (latest) => ({ assets: [{ id: "concurrent" }, ...latest], result: undefined }));
+        await commitAssetUpload(upload, ownership, harness.dependencies);
+        expect(harness.assets.map((asset) => asset.id)).toEqual(["new", "concurrent", "old"]);
+    });
+
+    test("deletes staged blobs when initial metadata persist fails", async () => {
         const harness = commitHarness();
         harness.dependencies.persistAssets = async () => { throw new Error("metadata failed"); };
-        await expect(commitAssetUpload(upload, { signal: new AbortController().signal, isCurrent: () => true }, harness.dependencies)).rejects.toThrow("metadata failed");
+        await expect(commitAssetUpload(upload, ownership, harness.dependencies)).rejects.toThrow("metadata failed");
         expect(harness.deleted).toEqual(["image:new"]);
         expect(harness.published).toEqual([]);
     });
+
+    test("retains blobs and durable truth when compensation persist also fails", async () => {
+        const harness = commitHarness();
+        let persists = 0;
+        let current = true;
+        // Model durable commit before a post-persist failure.
+        harness.dependencies.persistAssets = async (next) => {
+            persists++;
+            if (persists === 1) {
+                harness.setDurable(next);
+                current = false;
+                return;
+            }
+            throw new Error("rollback persist failed");
+        };
+        const error = await commitAssetUpload(upload, { ...ownership, isCurrent: () => current }, harness.dependencies).catch((value) => value);
+        expect(error).toMatchObject({ rollback: "failed_blobs_retained" });
+        expect(harness.deleted).toEqual([]);
+        expect(harness.assets.map((asset) => asset.id)).toContain("new");
+    });
 });
 
-describe("Phase 4C reference-aware deletion", () => {
-    test("retains a storage key shared by another asset", async () => {
-        let assets = [{ id: "a", kind: "image", data: { storageKey: "image:shared" } }, { id: "b", kind: "image", data: { storageKey: "image:shared" } }];
-        expect(planAssetRemoval("a", assets, [])).toMatchObject({ referencedByOtherAsset: true });
-        const deleted: string[] = [];
-        await confirmAssetRemoval({ assetId: "a", getAssets: () => assets, getProjects: () => [], removeAssetMetadata: () => { assets = assets.filter((asset) => asset.id !== "a"); }, deleteStoredImages: async (keys) => { deleted.push(...keys); }, deleteStoredMedia: async () => undefined });
-        expect(deleted).toEqual([]);
-    });
-
-    test("rechecks latest canvas state immediately before GC", async () => {
-        let assets = [{ id: "a", kind: "image", data: { storageKey: "image:key" } }];
-        let projects: unknown[] = [];
-        const deleted: string[] = [];
-        await confirmAssetRemoval({ assetId: "a", getAssets: () => assets, getProjects: () => projects, removeAssetMetadata: async () => { assets = []; projects = [{ node: { storageKey: "image:key" } }]; }, deleteStoredImages: async (keys) => { deleted.push(...keys); }, deleteStoredMedia: async () => undefined });
-        expect(deleted).toEqual([]);
-    });
-});
-
-describe("Phase 4C Blob URL lifecycle", () => {
-    test("revokes a new URL on write failure and preserves the old URL", async () => {
+describe("Phase 4C keyed Blob URL cache", () => {
+    test("invalidates an in-flight resolve without caching or leaking its URL", async () => {
+        let release!: (blob: Blob) => void;
+        const read = new Promise<Blob>((resolve) => { release = resolve; });
         const revoked: string[] = [];
-        await expect(replaceStoredBlobUrl({ storageKey: "image:key", blob: new Blob(), currentUrl: "blob:old", write: async () => { throw new Error("write"); }, lifecycle: { createObjectURL: () => "blob:new", revokeObjectURL: (url) => { revoked.push(url); } } })).rejects.toThrow("write");
-        expect(revoked).toEqual(["blob:new"]);
+        const cache = createBlobUrlCache({ read: async () => read, write: async () => undefined, remove: async () => undefined, createObjectURL: () => "blob:stale", revokeObjectURL: (url) => revoked.push(url) });
+        const resolving = cache.resolve("image:key", "fallback");
+        const deleting = cache.delete("image:key");
+        release(new Blob());
+        expect(await resolving).toBe("fallback");
+        await deleting;
+        expect(revoked).toEqual(["blob:stale"]);
     });
 
-    test("replaces only after write and revokes cached URL after successful delete", async () => {
+    test("serializes same-key set/delete and prevents resurrection", async () => {
         const events: string[] = [];
-        const url = await replaceStoredBlobUrl({ storageKey: "image:key", blob: new Blob(), currentUrl: "blob:old", write: async () => { events.push("write"); }, lifecycle: { createObjectURL: () => { events.push("create"); return "blob:new"; }, revokeObjectURL: (value) => { events.push(`revoke:${value}`); } } });
-        await deleteStoredBlobUrl({ storageKey: "image:key", currentUrl: url, remove: async () => { events.push("delete"); }, revokeObjectURL: (value) => { events.push(`revoke:${value}`); } });
-        expect(events).toEqual(["create", "write", "revoke:blob:old", "delete", "revoke:blob:new"]);
+        const cache = createBlobUrlCache({ read: async () => null, write: async () => { events.push("write"); }, remove: async () => { events.push("delete"); }, createObjectURL: () => "blob:new", revokeObjectURL: (url) => events.push(`revoke:${url}`) });
+        const setting = cache.set("video:key", new Blob());
+        const deleting = cache.delete("video:key");
+        expect(await setting).toBe("");
+        await deleting;
+        expect(events).toEqual(["write", "revoke:blob:new", "delete"]);
+        expect(await cache.resolve("video:key", "missing")).toBe("missing");
     });
 });

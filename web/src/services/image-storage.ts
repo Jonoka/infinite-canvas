@@ -2,7 +2,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
-import { deleteStoredBlobUrl, replaceStoredBlobUrl } from "@/services/blob-url-lifecycle";
+import { createBlobUrlCache } from "@/services/blob-url-cache";
 
 export type UploadedImage = {
     url: string;
@@ -14,27 +14,25 @@ export type UploadedImage = {
 };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
-const objectUrls = new Map<string, string>();
+const blobUrls = createBlobUrlCache<Blob>({
+    read: (key) => store.getItem<Blob>(key),
+    write: (key, blob) => store.setItem(key, blob),
+    remove: (key) => store.removeItem(key),
+    createObjectURL: (blob) => URL.createObjectURL(blob),
+    revokeObjectURL: (url) => URL.revokeObjectURL(url),
+});
 
 export async function uploadImage(input: string | Blob): Promise<UploadedImage> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
     const storageKey = `image:${nanoid()}`;
-    await store.setItem(storageKey, blob);
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
+    const url = await blobUrls.set(storageKey, blob);
     const meta = await readImageMeta(url);
     return { url, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
-    const cached = objectUrls.get(storageKey);
-    if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    return url;
+    return blobUrls.resolve(storageKey, fallback);
 }
 
 export async function getImageBlob(storageKey: string) {
@@ -42,10 +40,7 @@ export async function getImageBlob(storageKey: string) {
 }
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
-    const previous = objectUrls.get(storageKey);
-    const url = await replaceStoredBlobUrl({ storageKey, blob, currentUrl: previous, write: (key, value) => store.setItem(key, value), lifecycle: URL });
-    objectUrls.set(storageKey, url);
-    return url;
+    return blobUrls.set(storageKey, blob);
 }
 
 export async function imageToDataUrl(image: { url?: string; dataUrl?: string; storageKey?: string }) {
@@ -56,10 +51,7 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
 
 export async function deleteStoredImages(keys: Iterable<string>) {
     await Promise.all(
-        Array.from(new Set(keys)).map(async (key) => {
-            await deleteStoredBlobUrl({ storageKey: key, currentUrl: objectUrls.get(key), remove: (storageKey) => store.removeItem(storageKey), revokeObjectURL: URL.revokeObjectURL.bind(URL) });
-            objectUrls.delete(key);
-        }),
+        Array.from(new Set(keys)).map((key) => blobUrls.delete(key)),
     );
 }
 

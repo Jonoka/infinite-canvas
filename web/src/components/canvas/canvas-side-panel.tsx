@@ -5,12 +5,11 @@ import { motion } from "motion/react";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
-import { confirmAssetRemoval } from "@/lib/canvas/asset-removal";
+
 import { ASSET_UPLOAD_ACCEPT, planAssetUpload, runAssetUpload } from "@/lib/canvas/asset-upload";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { cn } from "@/lib/utils";
-import { deleteStoredMedia } from "@/services/file-storage";
-import { deleteStoredImages } from "@/services/image-storage";
+
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import {
@@ -285,6 +284,7 @@ function buildInsertPayload(asset: Asset): InsertAssetPayload {
 function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
     const { message } = App.useApp();
     const assets = useAssetStore((state) => state.assets);
+    const hydrated = useAssetStore((state) => state.hydrated);
     const commitUploadedAssets = useAssetStore((state) => state.commitUploadedAssets);
     const [keyword, setKeyword] = useState("");
     const [tagFilter, setTagFilter] = useState<string>("all");
@@ -345,7 +345,7 @@ function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetP
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder="搜索资产" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
                 <button
                     type="button"
-                    disabled={uploading}
+                    disabled={uploading || !hydrated}
                     onClick={() => fileInputRef.current?.click()}
                     className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/10"
                     style={{ color: theme.node.text }}
@@ -383,7 +383,7 @@ function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetP
                                     {isCollapsed ? null : (
                                         <div className="grid grid-cols-2 gap-2 px-1 pb-2 pt-1">
                                             {group.items.map((asset) => (
-                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => removeAssetSafely(asset.id, (text) => message.success(text)).catch(() => message.error("移除失败，请重试"))} />
+                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => useAssetStore.getState().removeAsset(asset.id).then(() => message.success("资产已移除")).catch(() => message.error("移除失败，请重试"))} removalDisabled={!hydrated} />
                                             ))}
                                         </div>
                                     )}
@@ -414,19 +414,7 @@ function readMediaMetadata(url: string, mimeType: string, signal: AbortSignal) {
     });
 }
 
-async function removeAssetSafely(assetId: string, notify: (content: string) => unknown) {
-    const plan = await confirmAssetRemoval({
-        assetId,
-        getAssets: () => useAssetStore.getState().assets,
-        getProjects: () => useCanvasStore.getState().projects,
-        removeAssetMetadata: (id) => useAssetStore.getState().removeAssetMetadata(id),
-        deleteStoredImages,
-        deleteStoredMedia,
-    });
-    notify(plan.referencedByCanvas || plan.referencedByOtherAsset ? "资产已移除，共享文件已保留" : "资产已移除");
-}
-
-function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void }) {
+function AssetCard({ asset, theme, onInsert, onRemove, removalDisabled }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void; removalDisabled: boolean }) {
     return (
         <div className="group relative aspect-square overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg" style={{ borderColor: theme.node.stroke, background: theme.node.panel }} tabIndex={0} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onInsert(); } }}>
             <AssetCover asset={asset} />
@@ -442,7 +430,8 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
                 <Popconfirm title="移除该资产?" okText="移除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={onRemove}>
                     <button
                         type="button"
-                        className="grid size-8 place-items-center rounded-full bg-white/90 text-stone-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-red-500 dark:bg-black/60 dark:text-stone-100 dark:hover:bg-black/80 dark:hover:text-red-400"
+                        disabled={removalDisabled}
+                        className="grid size-8 place-items-center rounded-full bg-white/90 text-stone-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-black/60 dark:text-stone-100 dark:hover:bg-black/80 dark:hover:text-red-400"
                         aria-label={`移除素材：${asset.title}`}
                     >
                         <Trash2 className="size-4" />
