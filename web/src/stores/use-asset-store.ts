@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { nanoid } from "nanoid";
 
-import { mutateAssetRepository } from "@/lib/canvas/asset-repository";
+import { mutateAssetRepository, type AssetRepositoryDependencies } from "@/lib/canvas/asset-repository";
 import { planAssetRemoval } from "@/lib/canvas/asset-removal";
 import type { AssetUploadCommit, AssetUploadOwnership } from "@/lib/canvas/asset-upload";
 import { commitAssetUpload } from "@/lib/canvas/asset-store-persistence";
@@ -62,9 +62,10 @@ async function hydrateAssets(assets: Asset[]): Promise<Asset[]> {
     }));
 }
 
-const repository = {
-    isHydrated: () => useAssetStore.getState().hydrated,
-    getAssets: () => useAssetStore.getState().assets,
+let getAssetState: () => AssetStore;
+const repository: AssetRepositoryDependencies<Asset> = {
+    isHydrated: () => getAssetState().hydrated,
+    getAssets: (): Asset[] => getAssetState().assets,
     persistAssets,
     publishAssets: (assets: Asset[]) => useAssetStore.setState({ assets }),
 };
@@ -112,6 +113,7 @@ export const useAssetStore = create<AssetStore>()((set, get) => ({
     // Physical cleanup is deliberately deferred until cross-store references can be rechecked safely.
     cleanupImages: () => undefined,
 }));
+getAssetState = useAssetStore.getState;
 
 const hydratePromise = (async () => {
     try {
