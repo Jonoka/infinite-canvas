@@ -19,6 +19,9 @@ describe("Phase 4D Canvas side-panel resize production wiring", () => {
         expect(panel).toContain('type: "unmount"');
         expect(panel).toContain('type: "escape"');
         expect(panel).not.toContain('window.addEventListener("pointermove"');
+        expect(panel).toContain('if (!handleRef.current) throw new Error("resize handle unavailable")');
+        expect(panel).toContain('dispatchResize({ type: "unmount" }, false)');
+        expect(panel).toContain("if (mounted) setResizing(false)");
     });
 
     test("exposes an accessible touch-safe separator and viewport-aware width", () => {
@@ -30,6 +33,15 @@ describe("Phase 4D Canvas side-panel resize production wiring", () => {
         expect(panel).toContain("touchAction: \"none\"");
         expect(panel).toContain("getSidePanelResizeBounds");
         expect(panel).toContain('type: "bounds-changed"');
+        expect(panel).toContain('const physicalSide = "left" as const');
+        expect(panel).toContain('aria-label="调整左侧面板宽度"');
+        expect(panel).toContain("onResize();");
+    });
+
+    test("synchronizes external state, cancels when hidden, and rejects pointers before preventing default", () => {
+        expect(panel).toContain('type: "external-width", width');
+        expect(panel).toContain('if (!panelOpen || !panelMounted) dispatchResize({ type: "unmount" })');
+        expect(panel).toContain("if (event.button !== 0 || !event.isPrimary) return;\n        event.preventDefault();");
     });
 
     test("centralizes fail-soft storage and clamps every store write", () => {
@@ -40,5 +52,7 @@ describe("Phase 4D Canvas side-panel resize production wiring", () => {
         expect(store).toContain("localStorage.setItem");
         expect(store).not.toContain('const WIDTH_KEY = "canvas-side-panel-width"');
         expect(panel).not.toContain('localStorage.setItem("canvas-side-panel-width"');
+        expect(store).toContain("const PERSISTED_BOUNDS = { min: 0, max: CANVAS_SIDE_PANEL_MAX_WIDTH }");
+        expect(store).toContain("normalizeSidePanelWidth(width, PERSISTED_BOUNDS");
     });
 });

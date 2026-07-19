@@ -95,6 +95,38 @@ describe("Phase 4D Canvas side-panel resize state machine", () => {
         expect(narrowed.effects).toEqual([{ type: "render-width", width: 180 }]);
     });
 
+    test("bounds changes during dragging cancel ownership and restore the preference in the new bounds", () => {
+        const cancelled = reduceSidePanelResize(moved(), { type: "bounds-changed", bounds: { min: 180, max: 180 } });
+        expect(cancelled.state).toMatchObject({ phase: "idle", preferredWidth: 280, renderedWidth: 180, bounds: { min: 180, max: 180 } });
+        expect(cancelled.effects).toContainEqual({ type: "release-pointer-capture", pointerId: 7 });
+        expect(cancelled.effects).toContainEqual({ type: "stop-interaction-lock" });
+        expect(cancelled.effects).not.toContainEqual(expect.objectContaining({ type: "persist-width" }));
+    });
+
+    test("keeps rendered drag origin separate from cancellation preference", () => {
+        const narrow = createSidePanelResizeState(420, { min: 140, max: 140 });
+        const dragging = reduceSidePanelResize(narrow, { type: "pointer-down", pointerId: 7, clientX: 100, button: 0, isPrimary: true, physicalSide: "left" }).state;
+        expect(dragging).toMatchObject({ startRenderedWidth: 140, cancelPreferredWidth: 420 });
+        expect(reduceSidePanelResize(dragging, { type: "escape" }).state).toMatchObject({ preferredWidth: 420, renderedWidth: 140 });
+    });
+
+    test("external width synchronizes idle state and cancels an active drag", () => {
+        const synced = reduceSidePanelResize(createSidePanelResizeState(280, bounds), { type: "external-width", width: 360 });
+        expect(synced.state).toMatchObject({ phase: "idle", preferredWidth: 360, renderedWidth: 360 });
+        const cancelled = reduceSidePanelResize(moved(), { type: "external-width", width: 400 });
+        expect(cancelled.state).toMatchObject({ phase: "idle", preferredWidth: 400, renderedWidth: 400 });
+        expect(cancelled.effects).toContainEqual({ type: "release-pointer-capture", pointerId: 7 });
+        expect(cancelled.effects).toContainEqual({ type: "stop-interaction-lock" });
+    });
+
+    test("narrow-screen pointer-up persists exactly the resulting state width", () => {
+        const narrow = createSidePanelResizeState(280, { min: 140, max: 140 });
+        const dragging = reduceSidePanelResize(narrow, { type: "pointer-down", pointerId: 7, clientX: 100, button: 0, isPrimary: true, physicalSide: "left" }).state;
+        const completed = reduceSidePanelResize(dragging, { type: "pointer-up", pointerId: 7, clientX: 160 });
+        expect(completed.state).toMatchObject({ preferredWidth: 140, renderedWidth: 140 });
+        expect(completed.effects).toContainEqual({ type: "persist-width", width: 140 });
+    });
+
     test("keyboard movement follows the physical separator and persists an atomic adjustment", () => {
         const idle = createSidePanelResizeState(280, bounds);
         const left = reduceSidePanelResize(idle, { type: "key-adjust", key: "ArrowRight", step: 8, physicalSide: "left" });

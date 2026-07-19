@@ -1,10 +1,18 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Empty, Input, Popconfirm, Select, Tag } from "antd";
 import { Check, ChevronRight, Download, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
 import { motion } from "motion/react";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
+import {
+    createSidePanelResizeState,
+    getSidePanelResizeBounds,
+    reduceSidePanelResize,
+    type SidePanelResizeEffect,
+    type SidePanelResizeEvent,
+    type SidePanelResizeState,
+} from "@/lib/canvas/canvas-side-panel-resize";
 
 import { ASSET_UPLOAD_ACCEPT, planAssetUpload, runAssetUpload } from "@/lib/canvas/asset-upload";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
@@ -25,6 +33,17 @@ import type { InsertAssetPayload } from "./asset-picker-modal";
 
 const PANEL_MOTION_SECONDS = CANVAS_SIDE_PANEL_MOTION_MS / 1000;
 const PANEL_EASE = [0.22, 1, 0.36, 1] as const;
+const PANEL_RESERVED_MAIN_WIDTH = 160;
+const PANEL_KEYBOARD_STEP = 8;
+
+function currentResizeBounds() {
+    return getSidePanelResizeBounds({
+        minWidth: CANVAS_SIDE_PANEL_MIN_WIDTH,
+        maxWidth: CANVAS_SIDE_PANEL_MAX_WIDTH,
+        viewportWidth: typeof window === "undefined" ? CANVAS_SIDE_PANEL_MAX_WIDTH + PANEL_RESERVED_MAIN_WIDTH : window.innerWidth,
+        reservedMainWidth: PANEL_RESERVED_MAIN_WIDTH,
+    });
+}
 
 type PanelTab = "canvas" | "assets";
 
@@ -58,27 +77,94 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onInsertA
     const panelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const panelMounted = useCanvasSidePanelStore((state) => state.panelMounted);
     const panelClosing = useCanvasSidePanelStore((state) => state.panelClosing);
-    const setWidth = useCanvasSidePanelStore((state) => state.setWidth);
+    const persistWidth = useCanvasSidePanelStore((state) => state.persistWidth);
     const [resizing, setResizing] = useState(false);
+    const [resizeBounds, setResizeBounds] = useState(() => currentResizeBounds());
+    const initialResizeState = useRef<SidePanelResizeState | null>(null);
+    if (!initialResizeState.current) initialResizeState.current = createSidePanelResizeState(width, resizeBounds);
+    const resizeStateRef = useRef(initialResizeState.current);
+    const [renderedWidth, setRenderedWidth] = useState(initialResizeState.current.renderedWidth);
+    const handleRef = useRef<HTMLButtonElement>(null);
+    const previousUserSelectRef = useRef<string | null>(null);
+    const persistWidthRef = useRef(persistWidth);
+    persistWidthRef.current = persistWidth;
+
+    const dispatchResize = (event: SidePanelResizeEvent, mounted = true) => {
+        const result = reduceSidePanelResize(resizeStateRef.current, event);
+        resizeStateRef.current = result.state;
+        applyResizeEffects(result.effects, mounted);
+    };
+    const applyResizeEffects = (effects: SidePanelResizeEffect[], mounted: boolean) => {
+        for (const effect of effects) {
+            try {
+                if (effect.type === "render-width") {
+                    if (mounted) setRenderedWidth(effect.width);
+                }
+                else if (effect.type === "persist-width") persistWidthRef.current(effect.width);
+                else if (effect.type === "set-pointer-capture") {
+                    if (!handleRef.current) throw new Error("resize handle unavailable");
+                    handleRef.current.setPointerCapture(effect.pointerId);
+                }
+                else if (effect.type === "release-pointer-capture") {
+                    if (handleRef.current?.hasPointerCapture(effect.pointerId)) handleRef.current.releasePointerCapture(effect.pointerId);
+                } else if (effect.type === "start-interaction-lock") {
+                    if (previousUserSelectRef.current === null) previousUserSelectRef.current = document.body.style.userSelect;
+                    document.body.style.userSelect = "none";
+                    if (mounted) setResizing(true);
+                } else if (effect.type === "stop-interaction-lock") {
+                    if (previousUserSelectRef.current !== null) document.body.style.userSelect = previousUserSelectRef.current;
+                    previousUserSelectRef.current = null;
+                    if (mounted) setResizing(false);
+                }
+            } catch {
+                if (effect.type === "set-pointer-capture") {
+                    dispatchResize({ type: "capture-failed", pointerId: effect.pointerId });
+                    return;
+                }
+            }
+        }
+    };
+    const physicalSide = "left" as const;
+
+    useEffect(() => {
+        const onBlur = () => dispatchResize({ type: "window-blur" });
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") dispatchResize({ type: "escape" });
+        };
+        const onResize = () => {
+            const bounds = currentResizeBounds();
+            setResizeBounds(bounds);
+            dispatchResize({ type: "bounds-changed", bounds });
+        };
+        window.addEventListener("blur", onBlur);
+        window.addEventListener("keydown", onKeyDown);
+        window.addEventListener("resize", onResize);
+        onResize();
+        return () => {
+            dispatchResize({ type: "unmount" }, false);
+            window.removeEventListener("blur", onBlur);
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener("resize", onResize);
+        };
+    }, []);
+
+    useEffect(() => {
+        dispatchResize({ type: "external-width", width });
+    }, [width]);
+
+    useEffect(() => {
+        if (!panelOpen || !panelMounted) dispatchResize({ type: "unmount" });
+    }, [panelOpen, panelMounted]);
 
     const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+        if (event.button !== 0 || !event.isPrimary) return;
         event.preventDefault();
-        const startX = event.clientX;
-        const startWidth = width;
-        let nextWidth = startWidth;
-        const onMove = (moveEvent: PointerEvent) => {
-            nextWidth = Math.min(CANVAS_SIDE_PANEL_MAX_WIDTH, Math.max(CANVAS_SIDE_PANEL_MIN_WIDTH, startWidth + moveEvent.clientX - startX));
-            setWidth(nextWidth);
-        };
-        const onUp = () => {
-            localStorage.setItem("canvas-side-panel-width", String(nextWidth));
-            window.removeEventListener("pointermove", onMove);
-            window.removeEventListener("pointerup", onUp);
-            setResizing(false);
-        };
-        setResizing(true);
-        window.addEventListener("pointermove", onMove);
-        window.addEventListener("pointerup", onUp);
+        dispatchResize({ type: "pointer-down", pointerId: event.pointerId, clientX: event.clientX, button: event.button, isPrimary: event.isPrimary, physicalSide });
+    };
+    const adjustWidth = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+        event.preventDefault();
+        dispatchResize({ type: "key-adjust", key: event.key, step: PANEL_KEYBOARD_STEP, physicalSide });
     };
 
     if (!panelMounted) return null;
@@ -87,7 +173,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onInsertA
         <motion.div
             className="relative z-[60] flex h-full shrink-0"
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: panelOpen ? width + 1 : 0, opacity: panelOpen ? 1 : 0 }}
+            animate={{ width: panelOpen ? renderedWidth + 1 : 0, opacity: panelOpen ? 1 : 0 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
             style={{ overflow: "clip", pointerEvents: panelClosing ? "none" : undefined }}
         >
@@ -96,7 +182,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onInsertA
                 initial={{ x: -48 }}
                 animate={{ x: panelClosing ? -28 : 0 }}
                 transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: PANEL_EASE }}
-                style={{ width, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                style={{ width: renderedWidth, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 data-canvas-no-zoom
             >
                 <div className="flex items-center gap-5 px-4 pt-3.5">
@@ -104,7 +190,25 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onInsertA
                     <TabButton label="资产" active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">{tab === "canvas" ? <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={onFocusNode} theme={theme} /> : <CanvasAssetsTab onInsert={onInsertAsset} theme={theme} />}</div>
-                <button type="button" className="absolute inset-y-0 right-0 z-40 w-4 translate-x-1/2 cursor-col-resize" onPointerDown={startResize} aria-label="调整左侧面板宽度" />
+                {/* React delegates pointercancel and lostpointercapture while this handle owns pointer capture. */}
+                <button
+                    ref={handleRef}
+                    type="button"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整左侧面板宽度"
+                    aria-valuemin={resizeBounds.min}
+                    aria-valuemax={resizeBounds.max}
+                    aria-valuenow={renderedWidth}
+                    className="absolute inset-y-0 right-0 z-40 w-4 translate-x-1/2 cursor-col-resize"
+                    style={{ touchAction: "none" }}
+                    onPointerDown={startResize}
+                    onPointerMove={(event) => dispatchResize({ type: "pointer-move", pointerId: event.pointerId, clientX: event.clientX })}
+                    onPointerUp={(event) => dispatchResize({ type: "pointer-up", pointerId: event.pointerId, clientX: event.clientX })}
+                    onPointerCancel={(event) => dispatchResize({ type: "pointer-cancel", pointerId: event.pointerId })}
+                    onLostPointerCapture={(event) => dispatchResize({ type: "lost-pointer-capture", pointerId: event.pointerId })}
+                    onKeyDown={adjustWidth}
+                />
             </motion.aside>
         </motion.div>
     );
