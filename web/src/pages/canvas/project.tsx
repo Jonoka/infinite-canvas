@@ -1076,8 +1076,9 @@ function InfiniteCanvasPage() {
         if (!project) return message.error("未找到当前画布");
         const hide = message.loading("正在导出当前画布…", 0);
         try {
-            await exportCanvasProjects([project], project.title || "无限画布");
-            message.success("已导出当前画布");
+            const result = await exportCanvasProjects([project], project.title || "无限画布");
+            if (result.status === "partial") message.warning(`已导出当前画布，${result.omittedCount} 个媒体未导出`);
+            else message.success("已导出当前画布");
         } catch (error) {
             console.error(error);
             message.error("导出失败，请重试");

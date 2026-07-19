@@ -168,8 +168,9 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, theme }: { nodes:
         setExporting(true);
         const hide = message.loading("正在导出选中元素…", 0);
         try {
-            await exportCanvasNodes(targets, `画布元素-${targets.length}个`);
-            message.success(`已导出 ${targets.length} 个元素`);
+            const result = await exportCanvasNodes(targets, `画布媒体-${targets.length}个`);
+            if (result.status === "partial") message.warning(`已导出 ${result.exportedFileCount} 个媒体，${result.omittedCount} 个未导出`);
+            else message.success(`已导出 ${result.exportedFileCount} 个媒体`);
             exitSelect();
         } catch (error) {
             console.error(error);
