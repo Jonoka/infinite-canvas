@@ -330,7 +330,7 @@ function createUnresolvedReferenceChip(nodeId: string, theme: (typeof canvasThem
 
 function removeActiveMention(editor: HTMLElement) {
     const selection = window.getSelection();
-    if (!isSelectionInsideEditor(editor, selection)) return;
+    if (!selection || !isSelectionInsideEditor(editor, selection)) return;
     const range = selection.getRangeAt(0);
     const text = textBeforeCaret(editor);
     const match = /@([^\s@]*)$/.exec(text);
@@ -397,9 +397,10 @@ function caretRect(): DOMRect | null {
     return editor ? editor.getBoundingClientRect() : null;
 }
 
-function closestEditor(node: Node) {
+function closestEditor(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
-    return element?.closest("[contenteditable='true']") || null;
+    const editor = element?.closest("[contenteditable='true']");
+    return editor instanceof HTMLElement ? editor : null;
 }
 
 function placeCaretAtEnd(element: HTMLElement) {
