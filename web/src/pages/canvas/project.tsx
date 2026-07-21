@@ -2645,12 +2645,15 @@ function InfiniteCanvasPage() {
 
             let context = null;
             if (!hasSavedImageMetadata) {
-                try {
-                    context = await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
-                } catch (error) {
-                    message.error(error instanceof Error ? error.message : "引用解析失败，无法重试");
+                const contextResult = await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || "")).then(
+                    (value) => ({ value }),
+                    (error) => ({ error }),
+                );
+                if ("error" in contextResult) {
+                    message.error(contextResult.error instanceof Error ? contextResult.error.message : "引用解析失败，无法重试");
                     return;
                 }
+                context = contextResult.value;
             }
             const prompt = (savedImageMetadata?.prompt || videoRetryPlan?.prompt || context?.prompt || "").trim();
             if (!prompt) {
