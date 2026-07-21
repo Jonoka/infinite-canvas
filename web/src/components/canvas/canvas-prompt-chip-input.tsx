@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
+import type { ClipboardEvent, CSSProperties, DragEvent, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Image } from "antd";
 import { FileText, Image as ImageIcon, Music2, Video } from "lucide-react";
@@ -8,6 +8,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { isImeComposing, isPlainEnterKey } from "@/lib/keyboard-event";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { insertPlainTextAtSelection, isSelectionInsideEditor, parseCanvasMentionTokens, serializeTrustedMentionDom } from "@/lib/canvas/canvas-stable-mentions";
 
 type Props = {
     value: string;
@@ -24,12 +25,9 @@ type MentionState = {
     rect: DOMRect | null;
 };
 
-type Token =
-    | { type: "text"; value: string }
-    | { type: "reference"; label: string };
 
 // 提示词面板专用的 contentEditable 输入框:@ 引用图片时直接内嵌真实缩略图 chip,而不是「图片1」文字。
-// 序列化时 chip → 引用 label 文本(如「图片1」),保证发给生成的 value 语义与旧 textarea 版一致。
+// 序列化时 chip → 稳定 nodeId token，普通 label 文本保持普通文本。
 export function CanvasPromptChipInput({ value, references, onChange, onSubmit, className, style, placeholder }: Props) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
@@ -42,10 +40,15 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const [imagePreview, setImagePreview] = useState<string | null>(null);
 
     const activeReferences = useMemo(() => references.filter((item) => item.active), [references]);
-    const referenceByLabel = useMemo(() => new Map(activeReferences.map((item) => [item.label, item])), [activeReferences]);
-    // 长 label 优先匹配,避免「图片1」把「图片10」切坏。
-    const activeLabels = useMemo(() => Array.from(new Set(activeReferences.map((item) => item.label))).sort((a, b) => b.length - a.length), [activeReferences]);
-    const tokens = useMemo(() => parseTokens(value, activeLabels), [value, activeLabels]);
+    const referenceById = useMemo(() => new Map(activeReferences.map((item) => [item.nodeId, item])), [activeReferences]);
+    const tokens = useMemo(() => parseCanvasMentionTokens(value), [value]);
+    const trustedNodeIds = useMemo(() => {
+        const ids = new Set(referenceById.keys());
+        tokens.forEach((token) => {
+            if (token.type === "reference") ids.add(token.nodeId);
+        });
+        return ids;
+    }, [referenceById, tokens]);
 
     const candidates = useMemo(() => {
         if (!mention) return [];
@@ -65,12 +68,12 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                 editor.append(document.createTextNode(token.value));
                 return;
             }
-            const reference = referenceByLabel.get(token.label);
+            const reference = referenceById.get(token.nodeId);
             if (reference) editor.append(createReferenceChip(reference, theme, setImagePreview));
-            else editor.append(document.createTextNode(token.label));
+            else editor.append(createUnresolvedReferenceChip(token.nodeId, theme));
         });
         lastEmittedRef.current = value;
-    }, [tokens, referenceByLabel, theme, value]);
+    }, [tokens, referenceById, theme, value]);
 
     const emit = (next: string) => {
         lastEmittedRef.current = next;
@@ -80,7 +83,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const syncFromEditor = () => {
         const editor = editorRef.current;
         if (!editor) return;
-        emit(serializeEditor(editor));
+        emit(serializeTrustedMentionDom(editor, trustedNodeIds));
         syncMention();
     };
 
@@ -103,11 +106,11 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
     const insertReference = (reference: CanvasResourceReference) => {
         const editor = editorRef.current;
         if (!editor) return;
-        removeActiveMention();
+        removeActiveMention(editor);
         const chip = createReferenceChip(reference, theme, setImagePreview);
         const space = document.createTextNode(" ");
         const selection = window.getSelection();
-        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const range = isSelectionInsideEditor(editor, selection) ? selection!.getRangeAt(0) : null;
         if (range) {
             range.insertNode(space);
             range.insertNode(chip);
@@ -120,7 +123,17 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
             placeCaretAtEnd(editor);
         }
         closeMention();
-        emit(serializeEditor(editor));
+        emit(serializeTrustedMentionDom(editor, trustedNodeIds));
+    };
+
+    const handlePlainTextPaste = (event: ClipboardEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        const editor = editorRef.current;
+        if (editor && insertPlainTextAtSelection(editor, event.clipboardData.getData("text/plain"))) syncFromEditor();
+    };
+    const preventMentionDrop = (event: DragEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
     };
 
     const showPlaceholder = !value.trim();
@@ -150,6 +163,8 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                     composingRef.current = false;
                     syncFromEditor();
                 }}
+                onPaste={handlePlainTextPaste}
+                onDrop={preventMentionDrop}
                 onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
                     event.stopPropagation();
                     if (isImeComposing(event)) return;
@@ -175,7 +190,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onSubmit, c
                             return;
                         }
                     }
-                    if ((event.key === "Backspace" || event.key === "Delete") && deleteAdjacentReference(event.key)) {
+                    if ((event.key === "Backspace" || event.key === "Delete") && deleteAdjacentReference(editorRef.current, event.key, trustedNodeIds)) {
                         event.preventDefault();
                         requestAnimationFrame(syncFromEditor);
                         return;
@@ -261,8 +276,7 @@ function MentionMenu({ rect, references, activeIndex, theme, onSelect }: { rect:
 }
 
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {
-    if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt="" className="size-9 rounded-md object-cover" />;
-    if (reference.kind === "video" && reference.previewUrl) return <video src={reference.previewUrl} className="size-9 rounded-md bg-black object-cover" muted preload="metadata" />;
+    if (reference.kind === "image" && reference.previewUrl) return <img src={reference.previewUrl} alt="" referrerPolicy="no-referrer" className="size-9 rounded-md object-cover" />;
     const Icon = reference.kind === "audio" ? Music2 : reference.kind === "video" ? Video : reference.kind === "image" ? ImageIcon : FileText;
     return (
         <span className="grid size-9 shrink-0 place-items-center rounded-md bg-black/10">
@@ -274,11 +288,12 @@ function ReferencePreview({ reference }: { reference: CanvasResourceReference })
 function createReferenceChip(reference: CanvasResourceReference, theme: (typeof canvasThemes)[keyof typeof canvasThemes], onImagePreview: (url: string) => void) {
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
-    wrapper.dataset.refLabel = reference.label;
+    wrapper.setAttribute("data-reference-node-id", reference.nodeId);
     if (reference.kind === "image" && reference.previewUrl) {
         const image = document.createElement("img");
         image.src = reference.previewUrl;
         image.alt = reference.title;
+        image.referrerPolicy = "no-referrer";
         image.className = "size-6 rounded object-cover";
         wrapper.className = "mx-px inline-flex size-6 items-center justify-center overflow-hidden rounded align-middle";
         wrapper.appendChild(image);
@@ -299,28 +314,25 @@ function createReferenceChip(reference: CanvasResourceReference, theme: (typeof 
     return wrapper;
 }
 
-function serializeEditor(editor: HTMLElement) {
-    return serializeNodes(editor.childNodes).replace(/﻿/g, "");
+function createUnresolvedReferenceChip(nodeId: string, theme: (typeof canvasThemes)[keyof typeof canvasThemes]) {
+    const wrapper = document.createElement("span");
+    wrapper.contentEditable = "false";
+    wrapper.setAttribute("data-reference-node-id", nodeId);
+    wrapper.className = "mx-px inline-flex h-6 max-w-48 items-center justify-center overflow-hidden rounded-md border border-dashed px-1 text-xs leading-none align-middle";
+    Object.assign(wrapper.style, { background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text } as CSSProperties);
+    wrapper.title = `引用资源不可用：${nodeId}`;
+    const text = document.createElement("span");
+    text.className = "block truncate opacity-70";
+    text.textContent = "资源已删除或未连接";
+    wrapper.appendChild(text);
+    return wrapper;
 }
 
-function serializeNodes(nodes: NodeListOf<ChildNode>) {
-    let result = "";
-    nodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) result += node.textContent || "";
-        if (!(node instanceof HTMLElement)) return;
-        const label = node.dataset.refLabel;
-        if (label) result += label;
-        else if (node.tagName === "BR") result += "\n";
-        else result += serializeNodes(node.childNodes);
-    });
-    return result;
-}
-
-function removeActiveMention() {
+function removeActiveMention(editor: HTMLElement) {
     const selection = window.getSelection();
-    if (!selection?.rangeCount) return;
+    if (!selection || !isSelectionInsideEditor(editor, selection)) return;
     const range = selection.getRangeAt(0);
-    const text = textBeforeCaret();
+    const text = textBeforeCaret(editor);
     const match = /@([^\s@]*)$/.exec(text);
     if (!match) return;
     range.setStart(range.startContainer, Math.max(0, range.startOffset - (match[1] || "").length - 1));
@@ -328,12 +340,13 @@ function removeActiveMention() {
 }
 
 // chip 是 contentEditable="false" 的原子块,光标紧邻它按 Backspace/Delete 时整块删除。
-function deleteAdjacentReference(key: string) {
+function deleteAdjacentReference(editor: HTMLElement | null, key: string, trustedNodeIds: ReadonlySet<string>) {
     const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) return false;
+    if (!editor || !isSelectionInsideEditor(editor, selection) || !selection?.isCollapsed) return false;
     const range = selection.getRangeAt(0);
     const target = adjacentReferenceNode(range, key);
-    if (!target) return false;
+    const nodeId = target?.dataset.referenceNodeId;
+    if (!target || !nodeId || !trustedNodeIds.has(nodeId) || !editor.contains(target)) return false;
     const nextCaretNode = document.createTextNode("");
     target.replaceWith(nextCaretNode);
     range.setStart(nextCaretNode, 0);
@@ -359,16 +372,16 @@ function adjacentReferenceNode(range: Range, key: string) {
 function findReferenceSibling(node: Node, previous: boolean, includeSelf = false): HTMLElement | null {
     let current: Node | null = includeSelf ? node : previous ? node.previousSibling : node.nextSibling;
     while (current && current.nodeType === Node.TEXT_NODE && !(current.textContent || "").trim()) current = previous ? current.previousSibling : current.nextSibling;
-    return current instanceof HTMLElement && current.dataset.refLabel ? current : null;
+    return current instanceof HTMLElement && current.dataset.referenceNodeId ? current : null;
 }
 
-function textBeforeCaret() {
+function textBeforeCaret(editor?: HTMLElement) {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return "";
     const range = selection.getRangeAt(0).cloneRange();
-    const editor = closestEditor(range.startContainer);
-    if (!editor) return "";
-    range.setStart(editor, 0);
+    const activeEditor = editor || closestEditor(range.startContainer);
+    if (!activeEditor || !isSelectionInsideEditor(activeEditor, selection)) return "";
+    range.setStart(activeEditor, 0);
     return range.toString();
 }
 
@@ -384,9 +397,10 @@ function caretRect(): DOMRect | null {
     return editor ? editor.getBoundingClientRect() : null;
 }
 
-function closestEditor(node: Node) {
+function closestEditor(node: Node): HTMLElement | null {
     const element = node instanceof Element ? node : node.parentElement;
-    return element?.closest("[contenteditable='true']") || null;
+    const editor = element?.closest("[contenteditable='true']");
+    return editor instanceof HTMLElement ? editor : null;
 }
 
 function placeCaretAtEnd(element: HTMLElement) {
@@ -398,26 +412,6 @@ function placeCaretAtEnd(element: HTMLElement) {
     selection?.addRange(range);
 }
 
-// 按 active label(已按长度降序)把 value 文本切成「文本片段 + 命中的引用 label」。
-function parseTokens(value: string, labels: string[]): Token[] {
-    if (!labels.length) return value ? [{ type: "text", value }] : [];
-    const escaped = labels.map(escapeRegExp).join("|");
-    const pattern = new RegExp(`(${escaped})`, "g");
-    const tokens: Token[] = [];
-    let lastIndex = 0;
-    for (const match of value.matchAll(pattern)) {
-        if (match.index === undefined) continue;
-        if (match.index > lastIndex) tokens.push({ type: "text", value: value.slice(lastIndex, match.index) });
-        tokens.push({ type: "reference", label: match[0] });
-        lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < value.length) tokens.push({ type: "text", value: value.slice(lastIndex) });
-    return tokens;
-}
-
-function escapeRegExp(value: string) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function clamp(value: number, min: number, max: number) {
     if (max < min) return min;
