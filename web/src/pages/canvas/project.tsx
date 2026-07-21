@@ -2645,7 +2645,8 @@ function InfiniteCanvasPage() {
 
             let context = null;
             if (!hasSavedImageMetadata) {
-                const contextResult = await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || "")).then(
+                const retryPrompt = sourceNode.type === CanvasNodeType.Config ? sourceNode.metadata?.composerContent || sourceNode.metadata?.prompt || node.metadata?.prompt || "" : sourceNode.metadata?.prompt || node.metadata?.prompt || "";
+                const contextResult = await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, retryPrompt)).then(
                     (value) => ({ value }),
                     (error) => ({ error }),
                 );

@@ -39,6 +39,7 @@ describe("Phase 4E stable mention production wiring", () => {
         expect(composer).toContain("lastEmittedRef");
         expect(project).toContain('message.error(error instanceof Error ? error.message : "引用解析失败，无法生成")');
         expect(project).toContain("finishGenerationRequest(nodeId, runController)");
+        expect(project).toContain("sourceNode.metadata?.composerContent || sourceNode.metadata?.prompt");
         expect(project).toContain('message.error(contextResult.error instanceof Error ? contextResult.error.message : "引用解析失败，无法重试")');
     });
 
