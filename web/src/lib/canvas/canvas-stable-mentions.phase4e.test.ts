@@ -41,6 +41,7 @@ describe("Phase 4E stable mention codec", () => {
         const escaped = escapePastedMentionText("外部 @[node:image-a] 与 @@[node:image-b]");
         expect(escaped).toBe("外部 @@[node:image-a] 与 @@@[node:image-b]");
         expect(parseCanvasMentionTokens(escaped)).toEqual([{ type: "text", value: "外部 @[node:image-a] 与 @@[node:image-b]" }]);
+        expect(serializeCanvasMentionTokens(parseCanvasMentionTokens(escaped))).toBe(escaped);
     });
 
     test("projects by node identity and first mention order rather than mutable labels or input order", () => {
@@ -59,6 +60,15 @@ describe("Phase 4E stable mention codec", () => {
         expect(projected.prompt).toBe("总结 【文本1】 和 【文本1】\n\n【文本1】\n稳定文本");
         expect(projected.orderedNodeIds).toEqual(["text-a"]);
         expect(projected.counts.text).toBe(1);
+    });
+
+    test("rejects node ids outside the canonical token grammar instead of emitting lossy tokens", () => {
+        expect(() => serializeCanvasMentionTokens([{ type: "reference", nodeId: "node/unsafe" }])).toThrow(CanvasMentionResolutionError);
+        expect(() => projectCanvasMentions("普通文本", [{ nodeId: "node/unsafe", kind: "image" }])).toThrow(CanvasMentionResolutionError);
+    });
+
+    test("rejects duplicate node identities because resolution would be ambiguous", () => {
+        expect(() => projectCanvasMentions("@[node:image-a]", [...inputs, { nodeId: "image-a", kind: "video" }])).toThrow(CanvasMentionResolutionError);
     });
 
     test("fails closed for unresolved mentions and never rebinds by a reused label", () => {

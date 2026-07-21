@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
+import type { ClipboardEvent, CSSProperties, DragEvent, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Button, Image } from "antd";
 import { FileText, Image as ImageIcon, Music2, Video, X } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { insertPlainTextAtSelection, isSelectionInsideEditor, parseCanvasMentionTokens, serializeTrustedMentionDom } from "@/lib/canvas/canvas-stable-mentions";
+import { isImeComposing } from "@/lib/keyboard-event";
 import type { NodeGenerationInput } from "./canvas-node-generation";
 
 type CanvasConfigComposerProps = {
@@ -14,25 +16,29 @@ type CanvasConfigComposerProps = {
     onClose: () => void;
 };
 
-type Token =
-    | { type: "text"; value: string }
-    | { type: "reference"; nodeId: string };
 
 type MentionState = {
     query: string;
 };
 
-export const CONFIG_REFERENCE_PATTERN = /@\[node:([^\]]+)\]/g;
 
 export function CanvasConfigComposer({ value, inputs, onChange, onClose }: CanvasConfigComposerProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
+    const lastEmittedRef = useRef(value);
     const [mention, setMention] = useState<MentionState | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
-    const tokens = useMemo(() => parseComposerTokens(value), [value]);
+    const tokens = useMemo(() => parseCanvasMentionTokens(value), [value]);
     const referenceById = useMemo(() => new Map(inputs.map((input) => [input.nodeId, input])), [inputs]);
+    const trustedNodeIds = useMemo(() => {
+        const ids = new Set(referenceById.keys());
+        tokens.forEach((token) => {
+            if (token.type === "reference") ids.add(token.nodeId);
+        });
+        return ids;
+    }, [referenceById, tokens]);
     const candidates = useMemo(() => {
         if (!mention) return [];
         const query = (mention.query || "").trim().toLowerCase();
@@ -41,9 +47,9 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
     }, [inputs, mention]);
 
     useEffect(() => {
-        if (document.activeElement === editorRef.current) return;
         const editor = editorRef.current;
         if (!editor) return;
+        if (document.activeElement === editor && value === lastEmittedRef.current) return;
         editor.textContent = "";
         tokens.forEach((token) => {
             if (token.type === "text") {
@@ -52,14 +58,21 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
             }
             const input = referenceById.get(token.nodeId);
             if (input) editor.append(createReferenceChip(input, inputs, theme, setImagePreview));
+            else editor.append(createUnresolvedReferenceChip(token.nodeId, theme));
         });
-    }, [inputs, referenceById, theme, tokens]);
+        lastEmittedRef.current = value;
+    }, [inputs, referenceById, theme, tokens, value]);
+
+    const emit = (next: string) => {
+        lastEmittedRef.current = next;
+        onChange(next);
+    };
 
     const syncFromEditor = () => {
         const editor = editorRef.current;
         if (!editor) return;
-        const next = serializeEditor(editor);
-        onChange(next);
+        const next = serializeTrustedMentionDom(editor, trustedNodeIds);
+        emit(next);
         syncMention();
     };
 
@@ -82,11 +95,11 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
     const insertReference = (input: NodeGenerationInput) => {
         const editor = editorRef.current;
         if (!editor) return;
-        removeActiveMention();
+        removeActiveMention(editor);
         const chip = createReferenceChip(input, inputs, theme, setImagePreview);
         const space = document.createTextNode(" ");
         const selection = window.getSelection();
-        const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        const range = isSelectionInsideEditor(editor, selection) ? selection!.getRangeAt(0) : null;
         if (range) {
             range.insertNode(space);
             range.insertNode(chip);
@@ -99,7 +112,17 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
             placeCaretAtEnd(editor);
         }
         closeMention();
-        onChange(serializeEditor(editor));
+        emit(serializeTrustedMentionDom(editor, trustedNodeIds));
+    };
+
+    const handlePlainTextPaste = (event: ClipboardEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        const editor = editorRef.current;
+        if (editor && insertPlainTextAtSelection(editor, event.clipboardData.getData("text/plain"))) syncFromEditor();
+    };
+    const preventMentionDrop = (event: DragEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
     };
 
     const stopCanvasInteraction = (event: PointerEvent | MouseEvent) => event.stopPropagation();
@@ -138,8 +161,11 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                         composingRef.current = false;
                         syncFromEditor();
                     }}
+                    onPaste={handlePlainTextPaste}
+                    onDrop={preventMentionDrop}
                     onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
                         event.stopPropagation();
+                        if (isImeComposing(event)) return;
                         if (mention && candidates.length) {
                             if (event.key === "ArrowDown") {
                                 event.preventDefault();
@@ -162,7 +188,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                                 return;
                             }
                         }
-                        if ((event.key === "Backspace" || event.key === "Delete") && deleteAdjacentReference(event.key)) {
+                        if ((event.key === "Backspace" || event.key === "Delete") && deleteAdjacentReference(editorRef.current, event.key, trustedNodeIds)) {
                             event.preventDefault();
                             requestAnimationFrame(syncFromEditor);
                             return;
@@ -220,8 +246,7 @@ function MentionMenu({ inputs, allInputs, activeIndex, theme, onSelect }: { inpu
 }
 
 function ResourcePreview({ input }: { input: NodeGenerationInput }) {
-    if (input.type === "image" && input.image) return <img src={input.image.dataUrl} alt="" className="size-9 rounded-md object-cover" />;
-    if (input.type === "video" && input.video) return <video src={input.video.url} className="size-9 rounded-md bg-black object-cover" muted preload="metadata" />;
+    if (input.type === "image" && input.image) return <img src={input.image.dataUrl} alt="" referrerPolicy="no-referrer" className="size-9 rounded-md object-cover" />;
     const Icon = input.type === "audio" ? Music2 : input.type === "video" ? Video : input.type === "image" ? ImageIcon : FileText;
     return (
         <span className="grid size-9 shrink-0 place-items-center rounded-md bg-black/10">
@@ -233,13 +258,14 @@ function ResourcePreview({ input }: { input: NodeGenerationInput }) {
 function createReferenceChip(input: NodeGenerationInput, inputs: NodeGenerationInput[], theme: (typeof canvasThemes)[keyof typeof canvasThemes], onImagePreview: (url: string) => void) {
     const wrapper = document.createElement("span");
     wrapper.contentEditable = "false";
-    wrapper.dataset.referenceNodeId = input.nodeId;
+    wrapper.setAttribute("data-reference-node-id", input.nodeId);
     wrapper.className = "mx-px inline-flex h-7 max-w-40 items-center justify-center overflow-hidden rounded-md border px-1 text-xs leading-none align-middle";
     Object.assign(wrapper.style, chipStyle(theme));
     if (input.type === "image" && input.image) {
         const image = document.createElement("img");
         image.src = input.image.dataUrl;
         image.alt = input.title;
+        image.referrerPolicy = "no-referrer";
         image.className = "size-6 rounded object-cover";
         wrapper.className = "mx-px inline-flex size-6 items-center justify-center overflow-hidden rounded align-middle";
         wrapper.appendChild(image);
@@ -258,40 +284,38 @@ function createReferenceChip(input: NodeGenerationInput, inputs: NodeGenerationI
     return wrapper;
 }
 
-function serializeEditor(editor: HTMLElement) {
-    return serializeNodes(editor.childNodes).replace(/\uFEFF/g, "");
+function createUnresolvedReferenceChip(nodeId: string, theme: (typeof canvasThemes)[keyof typeof canvasThemes]) {
+    const wrapper = document.createElement("span");
+    wrapper.contentEditable = "false";
+    wrapper.setAttribute("data-reference-node-id", nodeId);
+    wrapper.className = "mx-px inline-flex h-7 max-w-48 items-center justify-center overflow-hidden rounded-md border border-dashed px-1 text-xs leading-none align-middle";
+    Object.assign(wrapper.style, chipStyle(theme));
+    wrapper.title = `引用资源不可用：${nodeId}`;
+    const text = document.createElement("span");
+    text.className = "block truncate opacity-70";
+    text.textContent = "资源已删除或未连接";
+    wrapper.appendChild(text);
+    return wrapper;
 }
 
-function serializeNodes(nodes: NodeListOf<ChildNode>) {
-    let result = "";
-    nodes.forEach((node) => {
-        if (node.nodeType === Node.TEXT_NODE) result += node.textContent || "";
-        if (!(node instanceof HTMLElement)) return;
-        const nodeId = node.dataset.referenceNodeId;
-        if (nodeId) result += `@[node:${nodeId}]`;
-        else if (node.tagName === "BR") result += "\n";
-        else result += serializeNodes(node.childNodes);
-    });
-    return result;
-}
-
-function removeActiveMention() {
+function removeActiveMention(editor: HTMLElement) {
     const selection = window.getSelection();
-    if (!selection?.rangeCount) return;
+    if (!isSelectionInsideEditor(editor, selection)) return;
     const range = selection.getRangeAt(0);
-    const text = textBeforeCaret();
+    const text = textBeforeCaret(editor);
     const match = /@([^\s@]*)$/.exec(text);
     if (!match) return;
     range.setStart(range.startContainer, Math.max(0, range.startOffset - (match[1] || "").length - 1));
     range.deleteContents();
 }
 
-function deleteAdjacentReference(key: string) {
+function deleteAdjacentReference(editor: HTMLElement | null, key: string, trustedNodeIds: ReadonlySet<string>) {
     const selection = window.getSelection();
-    if (!selection?.rangeCount || !selection.isCollapsed) return false;
+    if (!editor || !isSelectionInsideEditor(editor, selection) || !selection?.isCollapsed) return false;
     const range = selection.getRangeAt(0);
     const target = adjacentReferenceNode(range, key);
-    if (!target) return false;
+    const nodeId = target?.dataset.referenceNodeId;
+    if (!target || !nodeId || !trustedNodeIds.has(nodeId) || !editor.contains(target)) return false;
     const nextCaretNode = document.createTextNode("");
     target.replaceWith(nextCaretNode);
     range.setStart(nextCaretNode, 0);
@@ -320,13 +344,13 @@ function findReferenceSibling(node: Node, previous: boolean, includeSelf = false
     return current instanceof HTMLElement && current.dataset.referenceNodeId ? current : null;
 }
 
-function textBeforeCaret() {
+function textBeforeCaret(editor?: HTMLElement) {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return "";
     const range = selection.getRangeAt(0).cloneRange();
-    const editor = closestEditor(range.startContainer);
-    if (!editor) return "";
-    range.setStart(editor, 0);
+    const activeEditor = editor || closestEditor(range.startContainer);
+    if (!activeEditor || !isSelectionInsideEditor(activeEditor, selection)) return "";
+    range.setStart(activeEditor, 0);
     return range.toString();
 }
 
@@ -344,18 +368,6 @@ function placeCaretAtEnd(element: HTMLElement) {
     selection?.addRange(range);
 }
 
-function parseComposerTokens(value: string): Token[] {
-    const tokens: Token[] = [];
-    let lastIndex = 0;
-    for (const match of value.matchAll(CONFIG_REFERENCE_PATTERN)) {
-        if (match.index === undefined) continue;
-        if (match.index > lastIndex) tokens.push({ type: "text", value: value.slice(lastIndex, match.index) });
-        tokens.push({ type: "reference", nodeId: match[1] });
-        lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < value.length) tokens.push({ type: "text", value: value.slice(lastIndex) });
-    return tokens;
-}
 
 function resourceLabel(input: NodeGenerationInput, inputs: NodeGenerationInput[]) {
     const sameTypeInputs = inputs.filter((item) => item.type === input.type);

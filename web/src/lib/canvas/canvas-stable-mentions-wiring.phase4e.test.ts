@@ -4,6 +4,7 @@ const packageJson = await Bun.file(new URL("../../../package.json", import.meta.
 const promptInput = await Bun.file(new URL("../../components/canvas/canvas-prompt-chip-input.tsx", import.meta.url)).text();
 const composer = await Bun.file(new URL("../../components/canvas/canvas-config-composer.tsx", import.meta.url)).text();
 const generation = await Bun.file(new URL("../../components/canvas/canvas-node-generation.ts", import.meta.url)).text();
+const project = await Bun.file(new URL("../../pages/canvas/project.tsx", import.meta.url)).text();
 const resources = await Bun.file(new URL("./canvas-resource-references.ts", import.meta.url)).text();
 
 describe("Phase 4E stable mention production wiring", () => {
@@ -25,9 +26,20 @@ describe("Phase 4E stable mention production wiring", () => {
         for (const source of [promptInput, composer]) {
             expect(source).toContain("onPaste={handlePlainTextPaste}");
             expect(source).toContain("onDrop={preventMentionDrop}");
+            expect(source).toContain("event.stopPropagation()");
             expect(source).toContain("isSelectionInsideEditor(editor");
             expect(source).toContain("isImeComposing(event)");
         }
+    });
+
+    test("preserves unresolved chips and catches resolver failures before generation can get stuck", () => {
+        expect(promptInput).toContain("createUnresolvedReferenceChip");
+        expect(composer).toContain("createUnresolvedReferenceChip");
+        expect(promptInput).toContain("trustedNodeIds");
+        expect(composer).toContain("lastEmittedRef");
+        expect(project).toContain('message.error(error instanceof Error ? error.message : "引用解析失败，无法生成")');
+        expect(project).toContain("finishGenerationRequest(nodeId, runController)");
+        expect(project).toContain('message.error(error instanceof Error ? error.message : "引用解析失败，无法重试")');
     });
 
     test("uses the shared stable resolver in generation rather than a private token regex", () => {

@@ -22,19 +22,28 @@ export function buildNodeMentionReferences(node: CanvasNodeData, nodes: CanvasNo
 
 export function getMentionResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     const configInputs = getConnectedConfigResourceNodes(nodeId, nodes, connections);
-    if (configInputs.length) return configInputs;
+    if (configInputs.length) return dedupeResourceNodes(configInputs);
     const ownInputs = getContextResourceNodes(nodeId, nodes, connections);
-    if (ownInputs.length) return ownInputs;
+    if (ownInputs.length) return dedupeResourceNodes(ownInputs);
     const node = nodes.find((item) => item.id === nodeId);
     return node && isResourceNode(node) ? [node] : [];
 }
 
 export function getGenerationResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {
     const configInputs = getConnectedConfigResourceNodes(nodeId, nodes, connections);
-    if (configInputs.length) return configInputs;
+    if (configInputs.length) return dedupeResourceNodes(configInputs);
     const ownInputs = getContextResourceNodes(nodeId, nodes, connections);
-    if (ownInputs.length) return ownInputs;
+    if (ownInputs.length) return dedupeResourceNodes(ownInputs);
     return [];
+}
+
+function dedupeResourceNodes(nodes: CanvasNodeData[]) {
+    const seen = new Set<string>();
+    return nodes.filter((node) => {
+        if (seen.has(node.id)) return false;
+        seen.add(node.id);
+        return true;
+    });
 }
 
 function getContextResourceNodes(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

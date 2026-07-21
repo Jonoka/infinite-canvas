@@ -2170,9 +2170,17 @@ function InfiniteCanvasPage() {
             let isCurrentRun = generationRequestGuard(nodeId, runController);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
-            const generationContext = await hydrateNodeGenerationContext(
-                buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
-            );
+            let generationContext;
+            try {
+                generationContext = await hydrateNodeGenerationContext(
+                    buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
+                );
+            } catch (error) {
+                finishGenerationRequest(nodeId, runController);
+                setRunningNodeId(null);
+                message.error(error instanceof Error ? error.message : "引用解析失败，无法生成");
+                return;
+            }
             const effectivePrompt = generationContext.prompt.trim();
             if (runController.signal.aborted) {
                 finishGenerationRequest(nodeId, runController);
@@ -2635,7 +2643,15 @@ function InfiniteCanvasPage() {
                 return;
             }
 
-            const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+            let context = null;
+            if (!hasSavedImageMetadata) {
+                try {
+                    context = await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+                } catch (error) {
+                    message.error(error instanceof Error ? error.message : "引用解析失败，无法重试");
+                    return;
+                }
+            }
             const prompt = (savedImageMetadata?.prompt || videoRetryPlan?.prompt || context?.prompt || "").trim();
             if (!prompt) {
                 message.warning("找不到提示词，无法重试");
