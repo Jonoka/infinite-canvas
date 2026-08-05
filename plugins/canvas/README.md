@@ -47,7 +47,7 @@ npm run dev     # watch,改动自动构建并同步
 
 ## 官方插件注册表
 
-本项目官方插件由 CI 集中构建后发布到孤儿分支 `plugins-dist`(**构建产物不进 git**),画布「节点插件」面板顶部的**官方插件**区经 jsDelivr 从该分支远程拉取并一键安装;第三方插件仍走下方「第三方插件」的 JS URL 安装。构建脚本与发布说明见 [`registry/`](./registry/README.md);清单地址可用 `VITE_PLUGIN_REGISTRY_URL` 覆盖成自建来源。
+本项目官方插件由 CI 集中构建后发布到孤儿分支 `plugins-dist`(**构建产物不进 git**),画布「节点插件」面板只从 allowlisted 官方注册表拉取，并在确认前展示清单与 SHA-256。生产环境不提供任意 JS URL 安装；本地开发使用下方的开发专用路径。构建脚本与发布说明见 [`registry/`](./registry/README.md)。
 
 ## 本地开发
 

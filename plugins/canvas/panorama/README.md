@@ -12,6 +12,6 @@ npm run dev        # watch
 
 ## 安装
 
-画布 → 左上菜单「节点插件」→ 安装 URL 填 `/plugins/panorama.js`(或托管后的公网 URL)。连接一个全景图片节点到本节点即可查看。
+生产环境从「节点插件」→「官方插件」安装并确认清单；`/plugins/panorama.js` 仅用于本地开发自动发现。连接一个全景图片节点到本节点即可查看。
 
 插件契约见 `plugins/canvas/README.md`。

@@ -12,6 +12,6 @@ npm run dev        # watch
 
 ## 安装
 
-画布 → 左上菜单「节点插件」→ 安装 URL 填 `/plugins/html.js`(或托管后的公网 URL)。
+生产环境从「节点插件」→「官方插件」安装并确认清单；`/plugins/html.js` 仅用于本地开发自动发现。
 
 插件契约见 `plugins/canvas/README.md`。
