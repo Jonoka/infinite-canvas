@@ -37,5 +37,14 @@ jobs:
       - name: Protocol tests
         run: bun run test:protocol
 
+      - name: Plugin security tests
+        run: bun run test:plugin-security
+
+      - name: Build official plugin registry
+        working-directory: plugins/canvas/registry
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
       - name: Build
         run: bun run build

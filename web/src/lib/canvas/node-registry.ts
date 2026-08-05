@@ -13,11 +13,31 @@ function bump() {
 }
 
 export function registerNodeDefinitions(defs: CanvasNodeDefinition[], pluginId = "builtin") {
+    const incoming = new Set<string>();
+    for (const def of defs) {
+        if (!def.type || incoming.has(def.type)) throw new Error(`节点类型重复: ${def.type || "<empty>"}`);
+        incoming.add(def.type);
+        if (pluginId !== "builtin" && !def.type.startsWith(`${pluginId}:`)) throw new Error(`插件节点必须使用 ${pluginId}: 命名空间`);
+        const owner = ownerByType.get(def.type);
+        if (owner && owner !== pluginId) throw new Error(`节点类型冲突: ${def.type} 已由 ${owner} 注册`);
+    }
     defs.forEach((def) => {
         definitions.set(def.type, def);
         ownerByType.set(def.type, pluginId);
     });
     bump();
+}
+
+export function assertPluginNodeDefinitions(defs: CanvasNodeDefinition[], pluginId: string, declaredTypes: readonly string[]) {
+    const actual = defs.map((definition) => definition.type);
+    if (actual.length !== declaredTypes.length || actual.some((type) => !declaredTypes.includes(type))) throw new Error("插件 bundle 节点类型与清单不一致");
+    const incoming = new Set<string>();
+    for (const type of actual) {
+        if (!type.startsWith(`${pluginId}:`) || incoming.has(type)) throw new Error(`插件节点必须唯一且使用 ${pluginId}: 命名空间`);
+        incoming.add(type);
+        const owner = ownerByType.get(type);
+        if (owner && owner !== pluginId) throw new Error(`节点类型冲突: ${type} 已由 ${owner} 注册`);
+    }
 }
 
 export function unregisterPluginNodes(pluginId: string) {

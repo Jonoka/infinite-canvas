@@ -54,14 +54,16 @@ export function usePluginHost(params: PluginHostParams) {
             }
         };
         return {
-            generateImage: async (prompt, options) => {
+            generateImage: async (prompt, options, identity) => {
+                if (identity) window.dispatchEvent(new CustomEvent("canvas:plugin-ai-request", { detail: { ...identity, capability: "image" } }));
                 const config = { ...buildGenerationConfig(effectiveConfig, undefined, "image"), count: String(options?.count || 1), ...(options?.model ? { model: options.model } : {}), ...(options?.size ? { size: options.size } : {}) };
                 ensureReady(config);
                 const references = toReferences(options?.references);
                 const items = references.length ? await requestEdit(config, prompt, references, undefined, { signal: options?.signal }) : await requestGeneration(config, prompt, { signal: options?.signal });
                 return { images: items.map((item) => item.dataUrl) };
             },
-            generateVideo: async (prompt, options) => {
+            generateVideo: async (prompt, options, identity) => {
+                if (identity) window.dispatchEvent(new CustomEvent("canvas:plugin-ai-request", { detail: { ...identity, capability: "video" } }));
                 const config = {
                     ...buildGenerationConfig(effectiveConfig, undefined, "video"),
                     ...(options?.model ? { model: options.model } : {}),
@@ -72,7 +74,8 @@ export function usePluginHost(params: PluginHostParams) {
                 const file = await storeGeneratedVideo(await requestVideoGeneration(config, prompt, toReferences(options?.references), [], [], { signal: options?.signal }));
                 return { url: file.url, mimeType: file.mimeType, width: file.width, height: file.height, durationMs: file.durationMs };
             },
-            generateText: async (prompt, options) => {
+            generateText: async (prompt, options, identity) => {
+                if (identity) window.dispatchEvent(new CustomEvent("canvas:plugin-ai-request", { detail: { ...identity, capability: "text" } }));
                 const config = { ...buildGenerationConfig(effectiveConfig, undefined, "text"), ...(options?.model ? { model: options.model } : {}) };
                 ensureReady(config);
                 const messages: AiTextMessage[] = [...(options?.system ? [{ role: "system" as const, content: options.system }] : []), { role: "user" as const, content: prompt }];
@@ -80,8 +83,14 @@ export function usePluginHost(params: PluginHostParams) {
                 return { text };
             },
             // 列出某能力下用户已配置的模型;label 取编码值中的模型名(去掉 channel 前缀)
-            listModels: (capability) => selectableModelsByCapability(effectiveConfig, capability as ModelCapability | undefined).map((value) => ({ value, label: decodeChannelModel(value)?.model || value })),
-            defaultModel: (capability) => buildGenerationConfig(effectiveConfig, undefined, capability).model,
+            listModels: (capability, identity) => {
+                if (identity) window.dispatchEvent(new CustomEvent("canvas:plugin-ai-request", { detail: { ...identity, capability: capability || "models" } }));
+                return selectableModelsByCapability(effectiveConfig, capability as ModelCapability | undefined).map((value) => ({ value, label: decodeChannelModel(value)?.model || value }));
+            },
+            defaultModel: (capability, identity) => {
+                if (identity) window.dispatchEvent(new CustomEvent("canvas:plugin-ai-request", { detail: { ...identity, capability } }));
+                return buildGenerationConfig(effectiveConfig, undefined, capability).model;
+            },
         };
     }, [effectiveConfig, isAiConfigReady, openConfigDialog]);
 
