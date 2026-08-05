@@ -2,6 +2,7 @@ import React from "react";
 
 import { emitCanvasEvent, onCanvasEvent } from "@/lib/canvas/canvas-event-bus";
 import type { CanvasPluginApp } from "@/types/canvas-plugin";
+import type { CanvasPluginAi, PluginAiRequestIdentity } from "@/types/canvas-plugin";
 
 // 插件运行时:远程插件通过它拿到宿主的 React 实例,避免多份 React 实例
 export type PluginRuntime = CanvasPluginApp & {
@@ -39,4 +40,32 @@ export function getPluginRuntime(): PluginRuntime {
         (window as unknown as { InfiniteCanvasRuntime?: PluginRuntime }).InfiniteCanvasRuntime = runtime;
     }
     return runtime;
+}
+
+export function capabilityFilteredAi(ai: CanvasPluginAi, identity: PluginAiRequestIdentity, permissions: readonly string[]): CanvasPluginAi {
+    const requireAi = () => {
+        if (!permissions.includes("ai")) throw new Error(`插件 ${identity.pluginId} 未获 AI 权限`);
+    };
+    return {
+        generateImage: (prompt, options) => {
+            requireAi();
+            return ai.generateImage(prompt, options, identity);
+        },
+        generateVideo: (prompt, options) => {
+            requireAi();
+            return ai.generateVideo(prompt, options, identity);
+        },
+        generateText: (prompt, options) => {
+            requireAi();
+            return ai.generateText(prompt, options, identity);
+        },
+        listModels: (capability) => {
+            requireAi();
+            return ai.listModels(capability, identity);
+        },
+        defaultModel: (capability) => {
+            requireAi();
+            return ai.defaultModel(capability, identity);
+        },
+    };
 }

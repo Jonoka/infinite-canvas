@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { App, Button, Input, Modal, Popconfirm, Switch, Tabs } from "antd";
-import { AlertTriangle, Download, Puzzle, RefreshCw, Trash2 } from "lucide-react";
+import { App, Button, Modal, Popconfirm, Switch, Tabs } from "antd";
+import { Download, Puzzle, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
-import { installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { installOfficialPlugin, prepareOfficialPlugin, setPluginEnabled, uninstallPlugin, updatePlugin, type PluginInstallCandidate } from "@/lib/canvas/plugin-loader";
 import { fetchOfficialPlugins, hasUpgrade, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
 
 export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const { message } = App.useApp();
+    const { message, modal } = App.useApp();
     const plugins = usePluginStore((state) => state.plugins);
-    const [url, setUrl] = useState("");
-    const [installing, setInstalling] = useState(false);
     const [busyId, setBusyId] = useState<string | null>(null);
 
     const [official, setOfficial] = useState<OfficialPluginEntry[]>([]);
@@ -21,8 +19,8 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     const [officialError, setOfficialError] = useState<string | null>(null);
 
     const recordById = useMemo(() => new Map(plugins.map((item) => [item.id, item])), [plugins]);
-    const localPlugins = useMemo(() => plugins.filter((item) => item.local), [plugins]);
-    const thirdPartyPlugins = useMemo(() => plugins.filter((item) => !item.local && !item.official), [plugins]);
+    const developmentPlugins = useMemo(() => plugins.filter((item) => item.trust === "development"), [plugins]);
+    const unverifiedPlugins = useMemo(() => plugins.filter((item) => item.trust === "legacy-unverified"), [plugins]);
 
     const loadOfficial = useCallback(async () => {
         setLoadingOfficial(true);
@@ -41,25 +39,41 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         if (open && official.length === 0 && !loadingOfficial && !officialError) void loadOfficial();
     }, [open, official.length, loadingOfficial, officialError, loadOfficial]);
 
-    const handleInstallUrl = async () => {
-        const target = url.trim();
-        if (!target) return;
-        setInstalling(true);
-        try {
-            const plugin = await installPluginFromUrl(target);
-            message.success(`已安装插件 ${plugin.name}`);
-            setUrl("");
-        } catch (error) {
-            message.error(`安装失败：${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            setInstalling(false);
-        }
-    };
+    const confirmCandidate = (candidate: PluginInstallCandidate) =>
+        new Promise<boolean>((resolve) => {
+            const manifest = candidate.manifest;
+            modal.confirm({
+                title: `确认安装 ${manifest.name}`,
+                width: 560,
+                okText: "确认安装",
+                cancelText: "取消",
+                content: (
+                    <dl className="mt-3 grid grid-cols-[96px_1fr] gap-x-3 gap-y-1 text-xs">
+                        <dt>来源域名</dt>
+                        <dd className="break-all">{candidate.sourceDomain}</dd>
+                        <dt>插件 ID</dt>
+                        <dd>{manifest.id}</dd>
+                        <dt>版本</dt>
+                        <dd>{manifest.version}</dd>
+                        <dt>节点类型</dt>
+                        <dd className="break-all">{manifest.nodeTypes.join(", ")}</dd>
+                        <dt>权限</dt>
+                        <dd>{manifest.permissions.length ? manifest.permissions.join(", ") : "无"}</dd>
+                        <dt>SHA-256</dt>
+                        <dd className="break-all font-mono">{manifest.sha256}</dd>
+                    </dl>
+                ),
+                onOk: () => resolve(true),
+                onCancel: () => resolve(false),
+            });
+        });
 
     const handleInstallOfficial = async (entry: OfficialPluginEntry) => {
         setBusyId(entry.id);
         try {
-            const plugin = await installPluginFromUrl(entry.url, { official: true });
+            const candidate = await prepareOfficialPlugin(entry);
+            if (!(await confirmCandidate(candidate))) return;
+            const plugin = await installOfficialPlugin(candidate);
             message.success(`已安装 ${plugin.name}`);
         } catch (error) {
             message.error(`安装失败：${error instanceof Error ? error.message : String(error)}`);
@@ -82,7 +96,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
 
     // 已安装插件的操作区:启用开关 +(非本地)更新/卸载
     // upgradable=true 时(远程有更高版本),更新按钮高亮为主色以提示升级
-    const installedControls = (record: InstalledPlugin, upgradable = false) => (
+    const installedControls = (record: InstalledPlugin, entry: OfficialPluginEntry, upgradable = false) => (
         <>
             <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, () => setPluginEnabled(record, checked), checked ? "已启用" : "已禁用")} />
             {!record.local && (
@@ -93,7 +107,16 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                         icon={<RefreshCw className="size-4" />}
                         loading={busyId === record.id}
                         title={upgradable ? "有新版本，点击升级" : "从来源更新"}
-                        onClick={() => runOnPlugin(record, async () => void (await updatePlugin(record)), "已更新")}
+                        onClick={() =>
+                            runOnPlugin(
+                                record,
+                                async () => {
+                                    const candidate = await prepareOfficialPlugin(entry);
+                                    if (await confirmCandidate(candidate)) await updatePlugin(record, candidate);
+                                },
+                                "已更新",
+                            )
+                        }
                     />
                     <Popconfirm title="卸载该插件？" okText="卸载" cancelText="取消" onConfirm={() => uninstallPlugin(record.id)}>
                         <Button type="text" size="small" danger icon={<Trash2 className="size-4" />} title="卸载" />
@@ -178,7 +201,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                             upgradable && record ? `${record.version} → ${entry.version}` : entry.version,
                             entry.description,
                             record ? (
-                                installedControls(record, upgradable)
+                                installedControls(record, entry, upgradable)
                             ) : (
                                 <Button type="primary" size="small" icon={<Download className="size-4" />} loading={busyId === entry.id} onClick={() => handleInstallOfficial(entry)}>
                                     安装
@@ -191,32 +214,57 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         </div>
     );
 
-    const localTab = <div className="thin-scrollbar max-h-[52vh] space-y-2 overflow-auto">{localPlugins.map((record) => row(record.id, <Puzzle className="size-4" />, record.name, record.version, record.description || record.url, installedControls(record)))}</div>;
+    const unverifiedTab = (
+        <div className="thin-scrollbar max-h-[52vh] space-y-2 overflow-auto">
+            {unverifiedPlugins.length === 0
+                ? emptyHint("没有遗留记录")
+                : unverifiedPlugins.map((record) =>
+                      row(
+                          record.id,
+                          <Puzzle className="size-4" />,
+                          record.name,
+                          record.version,
+                          "未验证，已禁用，仅保留供审计或卸载",
+                          <Popconfirm title="删除该遗留记录？" okText="删除" cancelText="取消" onConfirm={() => uninstallPlugin(record.id)}>
+                              <Button type="text" size="small" danger icon={<Trash2 className="size-4" />} title="删除" />
+                          </Popconfirm>,
+                      ),
+                  )}
+        </div>
+    );
 
-    const thirdPartyTab = (
-        <div className="space-y-3">
-            <div className="flex gap-2">
-                <Input placeholder="输入插件 JS 文件 URL，例如 https://.../plugin.js" value={url} onChange={(event) => setUrl(event.target.value)} onPressEnter={handleInstallUrl} allowClear />
-                <Button type="primary" loading={installing} onClick={handleInstallUrl} icon={<Puzzle className="size-4" />}>
-                    安装
-                </Button>
-            </div>
-            <div className="thin-scrollbar max-h-[42vh] space-y-2 overflow-auto">{thirdPartyPlugins.length === 0 ? emptyHint("还没有安装第三方插件") : thirdPartyPlugins.map((record) => row(record.id, <Puzzle className="size-4" />, record.name, record.version, record.description || record.url, installedControls(record)))}</div>
+    const developmentTab = (
+        <div className="thin-scrollbar max-h-[52vh] space-y-2 overflow-auto">
+            {developmentPlugins.map((record) =>
+                row(
+                    record.id,
+                    <Puzzle className="size-4" />,
+                    record.name,
+                    record.version,
+                    record.url,
+                    <>
+                        <Switch size="small" checked={record.enabled} loading={busyId === record.id} onChange={(checked) => runOnPlugin(record, () => setPluginEnabled(record, checked), checked ? "已启用" : "已禁用")} />
+                        <Popconfirm title="删除开发插件记录？" okText="删除" cancelText="取消" onConfirm={() => uninstallPlugin(record.id)}>
+                            <Button type="text" size="small" danger icon={<Trash2 className="size-4" />} title="删除" />
+                        </Popconfirm>
+                    </>,
+                ),
+            )}
         </div>
     );
 
     const tabs = [
         { key: "official", label: "官方插件", children: officialTab },
-        ...(localPlugins.length > 0 ? [{ key: "local", label: "本地插件", children: localTab }] : []),
-        { key: "third", label: "第三方插件", children: thirdPartyTab },
+        ...(import.meta.env.DEV && developmentPlugins.length > 0 ? [{ key: "development", label: "本地开发", children: developmentTab }] : []),
+        ...(unverifiedPlugins.length > 0 ? [{ key: "legacy", label: "遗留记录", children: unverifiedTab }] : []),
     ];
 
     return (
         <Modal title="节点插件" open={open} onCancel={onClose} footer={null} centered width={640}>
             <div className="space-y-3">
-                <div className="flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-5" style={{ borderColor: "#f59e0b55", background: "#f59e0b14", color: theme.node.text }}>
-                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-                    <span>插件代码会在当前页面内直接执行，可访问本地数据（包含 AI API Key）。请仅安装你信任来源的插件。</span>
+                <div className="flex items-start gap-2 rounded-lg border px-3 py-2 text-xs leading-5" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                    <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+                    <span>仅可安装官方注册表中经过清单、版本与 SHA-256 验证的插件。</span>
                 </div>
                 <Tabs defaultActiveKey="official" items={tabs} />
             </div>

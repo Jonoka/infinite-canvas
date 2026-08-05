@@ -18,13 +18,14 @@ export type GenerateTextOptions = { signal?: AbortSignal; model?: string; system
 export type GenerateTextResult = { text: string };
 export type PluginModelCapability = "image" | "video" | "text" | "audio";
 export type ModelOption = { value: string; label: string };
+export type PluginAiRequestIdentity = { pluginId: string; pluginVersion: string; registryId: string };
 
 export type CanvasPluginAi = {
-    generateImage: (prompt: string, options?: GenerateImageOptions) => Promise<GenerateImageResult>;
-    generateVideo: (prompt: string, options?: GenerateVideoOptions) => Promise<GenerateVideoResult>;
-    generateText: (prompt: string, options?: GenerateTextOptions) => Promise<GenerateTextResult>;
-    listModels: (capability?: PluginModelCapability) => ModelOption[];
-    defaultModel: (capability: PluginModelCapability) => string;
+    generateImage: (prompt: string, options?: GenerateImageOptions, identity?: PluginAiRequestIdentity) => Promise<GenerateImageResult>;
+    generateVideo: (prompt: string, options?: GenerateVideoOptions, identity?: PluginAiRequestIdentity) => Promise<GenerateVideoResult>;
+    generateText: (prompt: string, options?: GenerateTextOptions, identity?: PluginAiRequestIdentity) => Promise<GenerateTextResult>;
+    listModels: (capability?: PluginModelCapability, identity?: PluginAiRequestIdentity) => ModelOption[];
+    defaultModel: (capability: PluginModelCapability, identity?: PluginAiRequestIdentity) => string;
 };
 
 // 节点自带的工具栏按钮(追加到 hover 工具栏尾部)
@@ -65,6 +66,7 @@ export type CanvasNodeContext = {
     closePanel: () => void;
     // 插件私有持久化,命名空间隔离
     storage: PluginStorage;
+    sanitizeMarkup: (kind: "markdown" | "svg", source: string) => string;
 };
 
 export type PluginStorage = {
