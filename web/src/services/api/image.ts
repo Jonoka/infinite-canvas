@@ -78,6 +78,8 @@ type ImageApiResponse = {
     id?: string;
     task_id?: string;
     status?: string;
+    retry_after?: number | string;
+    result_expired?: boolean;
     url?: string;
 };
 type GeminiPart = {
@@ -104,6 +106,24 @@ type RequestOptions = {
     onTaskAccepted?: (task: ImageTaskAcceptance) => void | Promise<void>;
 };
 export type ImageTaskAcceptance = { id: string; contentIndex: number; model: string; group: string; recoverable: boolean };
+
+export class ImageTaskFailedError extends ImageRequestError {
+    constructor(message: string, apiCode?: string) {
+        super(message, apiCode);
+        this.name = "ImageTaskFailedError";
+    }
+}
+
+export class ImageTaskWaitError extends ImageRequestError {
+    constructor() {
+        super("等待图片任务超过 30 分钟，可继续查询结果");
+        this.name = "ImageTaskWaitError";
+    }
+}
+
+const IMAGE_TASK_WAIT_MS = 30 * 60 * 1000;
+const IMAGE_TASK_STATUS_TIMEOUT_MS = 30 * 1000;
+const IMAGE_TASK_CONTENT_TIMEOUT_MS = 60 * 1000;
 
 const QUALITY_BASE: Record<string, number> = {
     low: 1024,
@@ -380,27 +400,50 @@ async function resolveImageResponse(config: AiConfig, payload: ImageApiResponse,
     if (isNewApiMode(config) && imageTaskStatusPath(task.status || "") === "malformed") throw new Error("图片任务状态无效");
     const id = imageTaskId(task);
     if (!id) throw new Error("图片接口没有返回任务 ID");
+    const startedAt = Date.now();
     await options?.onTaskAccepted?.(imageTaskAcceptance(config, id));
-    if (isImageTaskSuccess(task)) return parseImagePayload(task);
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-        await delay(readImageTaskDelay(task, attempt), options?.signal);
-        const pollPath = isNewApiMode(config) ? imageTaskPath(id) : `${taskPath}/${encodeURIComponent(id)}`;
-        const response = await axios.get<ImageApiResponse>(aiApiUrl(config, pollPath), aiRequestOptions(config, { signal: options?.signal }));
-        const nextTask = isNewApiMode(config) ? unwrapImageTaskStatus(response.data) : imageTaskPayload(response.data) || response.data;
-        if (isImageTaskSuccess(nextTask)) return parseImagePayload(nextTask);
-        const status = (nextTask.status || "").toLowerCase();
-        if (["failed", "failure", "cancelled", "canceled", "expired"].includes(status)) {
-            const details = imageApiErrorDetails(nextTask.error);
-            throw new ImageRequestError(details.message || nextTask.msg || "图片生成失败", details.code);
-        }
-        if (attempt === 119) throw new Error("图片生成超时，请稍后重试");
-    }
-    throw new Error("图片生成超时，请稍后重试");
+    const pollPath = isNewApiMode(config) ? imageTaskPath(id) : `${taskPath}/${encodeURIComponent(id)}`;
+    return parseImagePayload(await waitForImageTask(config, task, pollPath, startedAt, options?.signal));
 }
 
-function readImageTaskDelay(task: ImageApiResponse, attempt: number) {
-    const retryAfter = Number((task as Record<string, unknown>).retry_after);
-    return Math.max(1000, Math.min(5000, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt < 4 ? 1500 : 3000));
+function throwIfImageTaskFailed(task: ImageApiResponse) {
+    if (task.result_expired === true) throw new ImageTaskFailedError("图片任务已过期，无法获取成品");
+    if (imageTaskStatusPath(task.status || "") !== "failed") return;
+    const details = imageApiErrorDetails(task.error);
+    const status = task.status?.toLowerCase();
+    const fallback = status === "expired" ? "图片任务已过期，无法获取成品" : status === "canceled" || status === "cancelled" ? "图片任务已取消" : "图片生成失败";
+    throw new ImageTaskFailedError(details.message || task.msg || fallback, details.code);
+}
+
+async function waitForImageTask(config: AiConfig, task: ImageApiResponse, pollPath: string, startedAt: number, signal?: AbortSignal) {
+    let currentTask = task;
+    while (true) {
+        throwIfImageTaskFailed(currentTask);
+        if (isImageTaskSuccess(currentTask)) return currentTask;
+        const elapsed = Date.now() - startedAt;
+        if (elapsed >= IMAGE_TASK_WAIT_MS) throw new ImageTaskWaitError();
+        await delay(Math.min(readImageTaskDelay(currentTask, elapsed), IMAGE_TASK_WAIT_MS - elapsed), signal);
+        const remaining = IMAGE_TASK_WAIT_MS - (Date.now() - startedAt);
+        if (remaining <= 0) throw new ImageTaskWaitError();
+        const response = await axios
+            .get<ImageApiResponse>(
+                aiApiUrl(config, pollPath),
+                aiRequestOptions(config, {
+                    signal,
+                    timeout: Math.min(IMAGE_TASK_STATUS_TIMEOUT_MS, remaining),
+                }),
+            )
+            .catch((error: unknown) => {
+                throw toImageTaskRequestError(error);
+            });
+        currentTask = isNewApiMode(config) ? unwrapImageTaskStatus(response.data) : imageTaskPayload(response.data) || response.data;
+    }
+}
+
+function readImageTaskDelay(task: ImageApiResponse, elapsed: number) {
+    const interval = elapsed < 30_000 ? 2000 : elapsed < 120_000 ? 5000 : elapsed < 600_000 ? 10_000 : 15_000;
+    const retryAfter = Number(task.retry_after);
+    return Number.isFinite(retryAfter) && retryAfter > 0 ? Math.max(interval, retryAfter * 1000) : interval;
 }
 
 function delay(ms: number, signal?: AbortSignal) {
@@ -409,21 +452,30 @@ function delay(ms: number, signal?: AbortSignal) {
             reject(new DOMException("Aborted", "AbortError"));
             return;
         }
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener(
-            "abort",
-            () => {
-                clearTimeout(timer);
-                reject(new DOMException("Aborted", "AbortError"));
-            },
-            { once: true },
-        );
+        const onAbort = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener("abort", onAbort);
+            reject(new DOMException("Aborted", "AbortError"));
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener("abort", onAbort, { once: true });
     });
 }
 
 function imageApiErrorDetails(error: ImageApiResponse["error"]) {
     if (typeof error === "string") return { message: error };
     return { message: error?.message, code: typeof error?.code === "string" ? error.code : undefined };
+}
+
+function toImageTaskRequestError(error: unknown) {
+    if (axios.isAxiosError(error)) {
+        if (error.response?.status === 410) return new ImageTaskFailedError("图片任务已过期，无法获取成品");
+        if (error.response?.status === 404) return new ImageTaskFailedError("图片任务或成品不存在");
+    }
+    return toImageRequestError(error, "查询图片任务失败");
 }
 
 function toImageRequestError(error: unknown, fallback: string) {
@@ -895,22 +947,23 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
-export async function recoverImageTask(config: AiConfig, task: Pick<ImageTaskAcceptance, "id" | "contentIndex" | "model" | "group">, options?: Pick<RequestOptions, "signal">) {
+export async function recoverImageTask(config: AiConfig, task: Pick<ImageTaskAcceptance, "id" | "contentIndex" | "model" | "group">, options?: Pick<RequestOptions, "signal"> & { waitForCompletion?: boolean }) {
     const requestConfig = { ...resolveModelRequestConfig(config, task.model), model: task.model, group: task.group };
     if (!isNewApiMode(requestConfig)) throw new ImageRequestError("仅 New API 图片任务支持恢复");
     try {
-        const taskResponse = await axios.get<ImageApiResponse>(aiApiUrl(requestConfig, imageTaskPath(task.id)), aiRequestOptions(requestConfig, { signal: options?.signal }));
+        const startedAt = Date.now();
+        const taskResponse = await axios.get<ImageApiResponse>(aiApiUrl(requestConfig, imageTaskPath(task.id)), aiRequestOptions(requestConfig, { signal: options?.signal, timeout: IMAGE_TASK_STATUS_TIMEOUT_MS }));
         const status = unwrapImageTaskStatus(taskResponse.data);
-        const path = imageTaskStatusPath(status.status || "");
-        if (path === "pending") throw new Error("图片任务尚未完成，请稍后重试");
-        if (path === "failed") {
-            const details = imageApiErrorDetails(status.error);
-            throw new ImageRequestError(details.message || status.msg || "图片生成失败", details.code);
+        throwIfImageTaskFailed(status);
+        if (options?.waitForCompletion) {
+            await waitForImageTask(requestConfig, status, imageTaskPath(task.id), startedAt, options.signal);
+        } else if (!isImageTaskSuccess(status)) {
+            throw new ImageRequestError("图片任务尚未完成，请稍后重试");
         }
-        const content = await axios.get<Blob>(aiApiUrl(requestConfig, imageTaskContentPath(task.id, task.contentIndex)), aiRequestOptions(requestConfig, { responseType: "blob", signal: options?.signal }));
+        const content = await axios.get<Blob>(aiApiUrl(requestConfig, imageTaskContentPath(task.id, task.contentIndex)), aiRequestOptions(requestConfig, { responseType: "blob", signal: options?.signal, timeout: IMAGE_TASK_CONTENT_TIMEOUT_MS }));
         return validateImageTaskContent(content.data);
     } catch (error) {
-        throw toImageRequestError(error, "重新获取图片失败");
+        throw toImageTaskRequestError(error);
     }
 }
 

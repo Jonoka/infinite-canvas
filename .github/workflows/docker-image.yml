@@ -47,6 +47,7 @@ jobs:
           bun src/services/api/ai-client.test.ts
           bun src/services/api/image.async-task.test.ts
           bun 'src/app/(user)/canvas/utils/canvas-image-task-recovery.test.ts'
+          bun 'src/app/(user)/image/generation-log.test.ts'
 
   build:
     needs:
